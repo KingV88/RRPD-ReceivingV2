@@ -19,17 +19,17 @@
 
   <div class="container">
     <aside class="sidebar">
-      <button class="sb-btn" data-target="home">Home</button>
-      <button class="sb-btn" data-target="input">Data Input</button>
-      <button class="sb-btn" data-target="racks">Racks / Axles / Gearboxes</button>
-      <button class="sb-btn" data-target="classifications">Classifications</button>
-      <button class="sb-btn" data-target="charts">Charts</button>
-      <button class="sb-btn" data-target="manual">Returns for Dummies</button>
-      <button class="sb-btn small" data-target="quiz">Training Quiz</button>
-      <button class="sb-btn small" data-target="logs">Logs</button>
-      <button class="sb-btn small" data-target="miss">Miss Inspections</button>
-      <button class="sb-btn small" id="printBtn">Print/Export</button>
-      <button class="sb-btn small" id="settingsBtn">Settings</button>
+      <button class="nav-btn" data-panel="home">Home</button>
+      <button class="nav-btn" data-panel="input">Data Input</button>
+      <button class="nav-btn" data-panel="racks">Racks / Axles / Gearboxes</button>
+      <button class="nav-btn" data-panel="classifications">Classifications</button>
+      <button class="nav-btn" data-panel="charts">Charts</button>
+      <button class="nav-btn" data-panel="manual">Returns for Dummies</button>
+      <button class="nav-btn small" data-panel="quiz">Training Quiz</button>
+      <button class="nav-btn small" data-panel="logs">Logs</button>
+      <button class="nav-btn small" data-panel="miss">Miss Inspections</button>
+      <button class="nav-btn small" id="printBtn">Print/Export</button>
+      <button class="nav-btn small" data-panel="settings">Settings</button>
     </aside>
 
     <main class="main">
@@ -144,13 +144,24 @@
         <h3>Settings / Admin</h3>
         <div class="form-row">
           <input id="admin_user" placeholder="Admin user">
-          <input id="admin_pass" placeholder="Password">
+          <input id="admin_pass" placeholder="Password" type="password">
           <button id="admin_login" class="btn">Login</button>
           <button id="admin_logout" class="btn alt">Logout</button>
         </div>
+        <div id="admin_controls" class="card">
+          <h4>Preferences</h4>
+          <label><input id="pref_dark" type="checkbox"> Dark Mode</label>
+        </div>
+        <div class="card">
+          <h4>Edit Goals</h4>
+          <input id="goal_racks" type="number" placeholder="Target racks/day">
+          <input id="goal_axles" type="number" placeholder="Target axles/day">
+          <input id="goal_gearboxes" type="number" placeholder="Target gearboxes/day">
+          <button id="save_goals" class="btn">Save Goals</button>
+        </div>
       </section>
 
-      <div class="card small footer">RRPD Receiving • Final Build</div>
+      <footer class="card small footer">RRPD Receiving • Final Build</footer>
     </main>
   </div>
 
