@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RRPD Receiving — Production</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<header class="header">
+  <div class="brand">RRPD Receiving</div>
+  <div class="header-right">
+    <div id="clock" class="small"></div>
+    <div id="admin_hint" class="small">—</div>
+  </div>
+</header>
+
+<div class="container">
+  <aside class="sidebar">
+    <button class="nav-btn" data-panel="home">Home</button>
+    <button class="nav-btn" data-panel="carriers">Carrier Data</button>
+    <button class="nav-btn" data-panel="scanners">Scanners</button>
+    <button class="nav-btn" data-panel="data_input">Data Input</button>
+    <button class="nav-btn" data-panel="racks">Racks/Axles/Gearboxes</button>
+    <button class="nav-btn" data-panel="classifications">Classifications</button>
+    <button class="nav-btn" data-panel="charts">Charts</button>
+    <button class="nav-btn" data-panel="manual">Returns for Dummies</button>
+    <button class="nav-btn" data-panel="quiz">Training Quiz</button>
+    <button class="nav-btn" data-panel="logs">Logs</button>
+    <button class="nav-btn" data-panel="settings">Settings</button>
+    <div class="sidebar-foot small">Offline • LocalStorage</div>
+  </aside>
+
+  <main class="main">
+    <!-- HOME -->
+    <section id="home" class="panel active card">
+      <h2>Welcome</h2>
+      <p class="small">This is the RRPD Receiving dashboard. Use the sidebar to navigate. Data is stored locally in your browser.</p>
+    </section>
+
+    <!-- CARRIERS -->
+    <section id="carriers" class="panel card">
+      <h3>Carrier Data</h3>
+      <div class="row">
+        <div class="canvas-card"><canvas id="carrier_pie"></canvas></div>
+        <div class="canvas-card"><canvas id="carrier_group"></canvas></div>
+      </div>
+      <div id="carrier_table" class="table-wrap"></div>
+    </section>
+
+    <!-- SCANNERS -->
+    <section id="scanners" class="panel card">
+      <h3>Scanners & Leaderboard</h3>
+      <div id="leaderboard" class="small card"></div>
+      <div class="canvas-card"><canvas id="scanner_bar"></canvas></div>
+      <div class="card"><h4>Scanner Manager</h4><div id="scanner_manager"></div></div>
+    </section>
+
+    <!-- DATA INPUT -->
+    <section id="data_input" class="panel card">
+      <h3>Quick Data Input</h3>
+      <div class="form-row">
+        <select id="di_category">
+          <option value="carriers">Carriers</option>
+          <option value="racks">Racks</option>
+          <option value="eracks">Electric Racks</option>
+          <option value="axles">Axles</option>
+          <option value="driveshafts">Drive Shafts</option>
+          <option value="gearboxes">Gearboxes</option>
+          <option value="classifications">Classifications</option>
+          <option value="scanners">Scanners</option>
+        </select>
+        <input id="di_date" type="date">
+        <input id="di_num1" type="number" placeholder="Value 1">
+        <input id="di_num2" type="number" placeholder="Value 2">
+        <input id="di_txt" type="text" placeholder="Text (name/note)">
+        <button id="di_submit" class="btn">Submit</button>
+      </div>
+    </section>
+
+    <!-- RACKS -->
+    <section id="racks" class="panel card">
+      <h3>Racks / Axles / Gearboxes</h3>
+      <div class="row">
+        <div class="canvas-card"><canvas id="donut_racks"></canvas><div id="donut_racks_text" class="small"></div></div>
+        <div class="canvas-card"><canvas id="donut_eracks"></canvas><div id="donut_eracks_text" class="small"></div></div>
+      </div>
+      <div class="row">
+        <div class="canvas-card"><canvas id="donut_axles"></canvas><div id="donut_axles_text" class="small"></div></div>
+        <div class="canvas-card"><canvas id="donut_ds"></canvas><div id="donut_ds_text" class="small"></div></div>
+      </div>
+      <div class="row">
+        <div class="canvas-card"><canvas id="donut_gb"></canvas><div id="donut_gb_text" class="small"></div></div>
+        <div class="canvas-card"><canvas id="mega_donut"></canvas><div id="mega_text" class="small"></div></div>
+      </div>
+      <div id="racks_log" class="log-table"></div>
+    </section>
+
+    <!-- CLASSIFICATIONS -->
+    <section id="classifications" class="panel card">
+      <h3>Classifications</h3>
+      <div class="form-row">
+        <input id="cl_date" type="date">
+        <input id="cl_good" type="number" placeholder="Good">
+        <input id="cl_used" type="number" placeholder="Used">
+        <input id="cl_core" type="number" placeholder="Core">
+        <input id="cl_damaged" type="number" placeholder="Damaged">
+        <input id="cl_missing" type="number" placeholder="Missing">
+        <input id="cl_notour" type="number" placeholder="Not Our">
+        <button id="cl_submit" class="btn">Submit</button>
+      </div>
+      <div class="canvas-card"><canvas id="class_donut"></canvas><div id="class_text" class="small"></div></div>
+      <div id="log_class" class="log-table"></div>
+    </section>
+
+    <!-- CHARTS -->
+    <section id="charts" class="panel card">
+      <h3>Charts</h3>
+      <div class="canvas-card"><canvas id="stacked_all"></canvas></div>
+    </section>
+
+    <!-- MANUAL -->
+    <section id="manual" class="panel card">
+      <h3>Returns for Dummies</h3>
+      <div class="manual-wrap">
+        <div id="manual_en"></div>
+        <div id="manual_es" style="display:none"></div>
+      </div>
+    </section>
+
+    <!-- QUIZ -->
+    <section id="quiz" class="panel card">
+      <h3>Training Quiz</h3>
+      <div class="form-row">
+        <label><input type="radio" name="quiz_lang" value="en" checked> English</label>
+        <label><input type="radio" name="quiz_lang" value="es"> Español</label>
+        <button id="start_quiz" class="btn">Start Quiz (Enter Code)</button>
+      </div>
+      <div id="log_quiz" class="log-table"></div>
+    </section>
+
+    <!-- LOGS -->
+    <section id="logs" class="panel card">
+      <h3>Logs & Leaderboard</h3>
+      <div id="all_logs_table" class="log-table"></div>
+      <div class="form-row">
+        <button id="export_csv" class="btn">Export CSV</button>
+        <button id="backup_json" class="btn">Backup JSON</button>
+        <button id="clear_logs_btn" class="btn alt">Soft-Clear Logs (Admin)</button>
+      </div>
+      <div class="card"><h4>Scanner Leaderboard</h4><div id="leaderboard" class="small"></div></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="settings" class="panel card">
+      <h3>Settings / Admin</h3>
+      <div class="form-row">
+        <input id="admin_user" placeholder="Admin user e.g. ReesW"><input id="admin_pass" placeholder="Password">
+        <button id="admin_login" class="btn">Login</button><button id="admin_logout" class="btn alt" style="display:none">Logout</button>
+      </div>
+
+      <div id="admin_controls" style="display:none">
+        <div class="card">
+          <h4>Create Admin</h4>
+          <input id="new_admin_name" placeholder="name"><input id="new_admin_pass" placeholder="pass"><button id="create_admin" class="btn">Create</button>
+        </div>
+
+        <div class="card">
+          <h4>Quiz Editor</h4>
+          <div id="quiz_editor"></div>
+          <button id="add_quiz_q" class="btn">Add Question</button>
+        </div>
+
+        <div class="card">
+          <h4>Scanner Manager</h4>
+          <div id="scanner_admin"></div>
+        </div>
+
+        <div class="card">
+          <h4>Goals</h4>
+          <div class="form-row">
+            <label>Racks:<input id="goal_racks" type="number"></label>
+            <label>ERacks:<input id="goal_eracks" type="number"></label>
+            <label>Axles:<input id="goal_axles" type="number"></label>
+            <label>DS:<input id="goal_ds" type="number"></label>
+            <label>GB:<input id="goal_gb" type="number"></label>
+            <button id="save_goals" class="btn">Save Goals</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h4>Archive & Soft Delete</h4>
+          <button id="view_archive" class="btn">View Archive</button>
+          <button id="restore_all" class="btn">Restore All</button>
+          <button id="clear_all_btn" class="btn alt">Clear All Data (Admin)</button>
+        </div>
+
+        <div class="card">
+          <h4>Preferences</h4>
+          <label><input id="pref_sound" type="checkbox"> Sound on save</label>
+          <label><input id="pref_autocalc" type="checkbox" checked> Auto-calculate</label>
+          <label>UI Language: <select id="ui_lang"><option value="en">English</option><option value="es">Español</option></select></label>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">RRPD Receiving • Production Build</div>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="script.js"></script>
+</body>
+</html>
