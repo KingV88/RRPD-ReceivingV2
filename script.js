@@ -78,13 +78,42 @@ document.getElementById('restore_all').addEventListener('click',()=>{ if(!confir
 document.getElementById('start_quiz').addEventListener('click',()=>{ const code=prompt('Enter training code:'); const tc=localStorage.getItem(KEYS.training)||DEFAULT_TRAIN; if(code!==tc){ alert('Incorrect code'); return;} const qs=lsGet(KEYS.quiz)||[]; const popup=window.open('','quiz','width=700,height=700'); if(!popup){ alert('Popup blocked'); return;} let html='<html><head><title>Quiz</title></head><body><h3>Training Quiz</h3><form id="qform">'; qs.forEach((q,i)=>{ html+=`<div><strong>${i+1}. ${q.q}</strong>`; q.opts.forEach((o,j)=> html+=`<div><label><input type="radio" name="q${i}" value="${j}"> ${o}</label></div>`); html+='</div><hr>'; }); html+='<button type="button" id="submit">Submit</button><div id="result"></div></form><script>document.getElementById("submit").addEventListener("click",()=>{const quiz='+JSON.stringify(lsGet(KEYS.quiz))+';let score=0;quiz.forEach((q,i)=>{const sel=document.querySelector("input[name=\\"q"+i+"\\"]:checked"); if(sel && Number(sel.value)===q.ans) score++;}); document.getElementById("result").innerText="Score: "+score+" / "+quiz.length; window.opener.postMessage({type:"quiz_result",score:score,total:quiz.length},"*");});</script></body></html>'; popup.document.write(html); popup.document.close(); });
 
 window.addEventListener('message',(e)=>{ if(e.data && e.data.type==='quiz_result'){ const logs=lsGet(KEYS.logs)||[]; logs.push({ts:nowISO(),panel:'quiz',action:'result',details:JSON.stringify(e.data),user:localStorage.getItem('rrpd_admin_user')||'user'}); lsSet(KEYS.logs,logs); toast('Quiz result saved'); renderLogs(); } });
+/* ----------------------------
+   Miss Inspections
+   ---------------------------- */
+const MISS_KEY = 'rrpd_miss';
+
+function renderMiss() {
+  const arr = lsGet(MISS_KEY) || [];
+  const container = document.getElementById('miss_table');
+  if (!container) return;
+  let html = '<table><thead><tr><th>Date</th><th>Issue</th></tr></thead><tbody>';
+  arr.slice().reverse().forEach(r=>{
+    html += `<tr><td>${r.date}</td><td>${r.issue}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+document.getElementById('miss_submit').addEventListener('click', ()=>{
+  const date = document.getElementById('miss_date').value || new Date().toISOString().slice(0,10);
+  const issue = document.getElementById('miss_issue').value.trim();
+  if(!issue){ alert('Please enter a problem'); return; }
+  const arr = lsGet(MISS_KEY) || [];
+  arr.push({date, issue, ts: nowISO()});
+  lsSet(MISS_KEY, arr);
+  addLog('miss','save_miss', issue);
+  toast('Miss Inspection saved');
+  renderMiss();
+  document.getElementById('miss_issue').value='';
+});
 
 // small bindings
 document.getElementById('log_refresh').addEventListener('click',()=>renderLogs());
 document.getElementById('log_search').addEventListener('input',()=>renderLogs());
 
 // initial renders
-openPanel('home'); renderCarriers(); renderScanners(); renderRacks(); renderClass(); renderCharts(); renderManual(); renderLogs(); renderScanners();
+openPanel('home'); renderCarriers(); renderScanners(); renderRacks(); renderClass(); renderCharts(); renderManual(); renderLogs(); renderScanners();renderMiss();
 
 // clock
 setInterval(()=>document.getElementById('clock').innerText = new Date().toLocaleTimeString(),1000);
