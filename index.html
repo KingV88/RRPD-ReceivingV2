@@ -1,104 +1,136 @@
-// State
-let state = JSON.parse(localStorage.getItem("state")) || {
-  scanners: {},
-  carriers: {},
-  racks: {},
-  inspections: [],
-  scannerGoal: 400,
-  ratioGoal: 100
-};
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RRPD Receiving Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- CSS -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
 
-// Save helper
-function saveState() {
-  localStorage.setItem("state", JSON.stringify(state));
-}
+  <!-- Top Navigation Bar -->
+  <nav class="topbar">
+    <div class="logo">
+      <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo-img">
+      <span>Performance Dashboard</span>
+    </div>
+    <ul class="nav-links">
+      <li class="nav-btn active" data-panel="home">Home</li>
+      <li class="nav-btn" data-panel="scanners">Scanners</li>
+      <li class="nav-btn" data-panel="carriers">Carriers</li>
+      <li class="nav-btn" data-panel="racks">Racks</li>
+      <li class="nav-btn" data-panel="inspections">Miss Inspections</li>
+      <li class="nav-btn" data-panel="training">Training & Quiz</li>
+      <li class="nav-btn" data-panel="settings">Settings</li>
+    </ul>
+  </nav>
 
-// Panel navigation
-document.querySelectorAll(".nav-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById(btn.dataset.panel).classList.add("active");
-  });
-});
+  <!-- Panels -->
+  <main>
+    <!-- Home Dashboard -->
+    <section id="home" class="panel active">
+      <h1>Dashboard Overview</h1>
+      <div class="card">
+        <h2>Scans Today</h2>
+        <p id="scansToday">0</p>
+        <div class="progress-container">
+          <div id="scannerGoalProgress" class="progress-bar"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Received vs Scanned Ratio</h2>
+        <p id="ratioStat">0%</p>
+        <div class="progress-container">
+          <div id="ratioProgress" class="progress-bar"></div>
+        </div>
+      </div>
+      <canvas id="scannerWeeklyChart"></canvas>
+      <canvas id="carrierWeeklyChart"></canvas>
+      <canvas id="racksWeeklyChart"></canvas>
+    </section>
 
-// Scanner form
-document.getElementById("scannerForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const name = document.getElementById("scannerName").value;
-  const count = parseInt(document.getElementById("scannerCount").value);
-  const today = new Date().toISOString().split("T")[0];
-  if (!state.scanners[today]) state.scanners[today] = {};
-  state.scanners[today][name] = (state.scanners[today][name] || 0) + count;
-  saveState();
-  render();
-  e.target.reset();
-});
+    <!-- Scanners Panel -->
+    <section id="scanners" class="panel">
+      <h1>Scanners - Daily</h1>
+      <form id="scannerForm" class="card">
+        <input type="text" id="scannerName" placeholder="Scanner Name" required>
+        <input type="number" id="scannerCount" placeholder="Scans Today" required>
+        <button type="submit">Save</button>
+      </form>
+      <canvas id="scannerDonut"></canvas>
+      <canvas id="scannerDailyChart"></canvas>
+    </section>
 
-// Carrier form
-document.getElementById("carrierForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const fedex = parseInt(document.getElementById("fedex").value) || 0;
-  const ups = parseInt(document.getElementById("ups").value) || 0;
-  const usps = parseInt(document.getElementById("usps").value) || 0;
-  const other = parseInt(document.getElementById("other").value) || 0;
-  const today = new Date().toISOString().split("T")[0];
-  state.carriers[today] = { fedex, ups, usps, other };
-  saveState();
-  render();
-  e.target.reset();
-});
+    <!-- Carriers Panel -->
+    <section id="carriers" class="panel">
+      <h1>Carriers - Daily</h1>
+      <form id="carrierForm" class="card">
+        <input type="number" id="fedex" placeholder="FedEx">
+        <input type="number" id="ups" placeholder="UPS">
+        <input type="number" id="usps" placeholder="USPS">
+        <input type="number" id="other" placeholder="Other">
+        <button type="submit">Save</button>
+      </form>
+      <canvas id="carrierDonut"></canvas>
+      <canvas id="carrierDailyChart"></canvas>
+    </section>
 
-// Save scanner goal
-document.getElementById("saveScannerGoal").addEventListener("click", () => {
-  const goal = parseInt(document.getElementById("scannerGoalInput").value);
-  if (goal > 0) {
-    state.scannerGoal = goal;
-    saveState();
-    render();
-  }
-});
+    <!-- Racks Panel -->
+    <section id="racks" class="panel">
+      <h1>Racks - Daily</h1>
+      <div class="racks-grid">
+        <canvas id="rackDonut"></canvas>
+        <canvas id="electricDonut"></canvas>
+        <canvas id="axleDonut"></canvas>
+        <canvas id="driveDonut"></canvas>
+        <canvas id="gearDonut"></canvas>
+      </div>
+    </section>
 
-// Render functions
-function render() {
-  const today = new Date().toISOString().split("T")[0];
-  const scans = state.scanners[today] || {};
-  const totalScans = Object.values(scans).reduce((a,b)=>a+b,0);
-  const carriers = state.carriers[today] || {};
-  const totalReceived = Object.values(carriers).reduce((a,b)=>a+b,0);
+    <!-- Miss Inspections -->
+    <section id="inspections" class="panel">
+      <h1>Miss Inspections</h1>
+      <form id="inspectionForm" class="card">
+        <input type="text" id="inspectionScanner" placeholder="Scanner Name" required>
+        <input type="text" id="inspectionReason" placeholder="Reason" required>
+        <button type="submit">Save</button>
+      </form>
+      <canvas id="inspectionDonut"></canvas>
+      <table id="inspectionTable" class="card"></table>
+    </section>
 
-  // Home stats
-  document.getElementById("scansToday").textContent = totalScans;
-  let percentGoal = Math.min(100, (totalScans/state.scannerGoal)*100);
-  document.getElementById("scannerGoalProgress").style.width = percentGoal+"%";
-  document.getElementById("scannerPanelGoalProgress").style.width = percentGoal+"%";
+    <!-- Training & Quiz -->
+    <section id="training" class="panel">
+      <h1>Training & Quiz</h1>
+      <div class="card" id="trainingContent">
+        <p>Training materials will be displayed here.</p>
+      </div>
+      <div class="card" id="quizContent">
+        <p>Quiz will appear here (one question at a time).</p>
+      </div>
+    </section>
 
-  const ratio = totalReceived ? Math.round((totalScans/totalReceived)*100) : 0;
-  document.getElementById("ratioStat").textContent = ratio+"%";
-  document.getElementById("ratioProgress").style.width = ratio+"%";
+    <!-- Settings -->
+    <section id="settings" class="panel">
+      <h1>Settings / Admin</h1>
+      <form id="scannerGoalForm" class="card">
+        <input type="number" id="scannerGoalInput" placeholder="Daily Scanner Goal" required>
+        <button type="button" id="saveScannerGoal">Save Goal</button>
+      </form>
+      <div id="reportHeader" class="card">
+        <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo-img">
+        <h2>Daily Performance Report</h2>
+        <p>Date: <span id="reportDate"></span></p>
+        <p>Prepared by: Admin</p>
+        <button onclick="window.print()">Print Report</button>
+      </div>
+    </section>
+  </main>
 
-  // Charts (basic demo versions)
-  if (window.scannerDonutChart) window.scannerDonutChart.destroy();
-  const ctx1 = document.getElementById("scannerDonut").getContext("2d");
-  window.scannerDonutChart = new Chart(ctx1, {
-    type: "doughnut",
-    data: {
-      labels: Object.keys(scans),
-      datasets: [{ data: Object.values(scans), backgroundColor:["#0077cc","#00cc77","#ffaa00"] }]
-    }
-  });
-
-  if (window.carrierDonutChart) window.carrierDonutChart.destroy();
-  const ctx2 = document.getElementById("carrierDonut").getContext("2d");
-  window.carrierDonutChart = new Chart(ctx2, {
-    type: "doughnut",
-    data: {
-      labels: Object.keys(carriers),
-      datasets: [{ data: Object.values(carriers), backgroundColor:["#0077cc","#00cc77","#ffaa00","#cc0044"] }]
-    }
-  });
-}
-
-// Initial render
-render();
+  <!-- JS -->
+  <script src="script.js"></script>
+</body>
+</html>
