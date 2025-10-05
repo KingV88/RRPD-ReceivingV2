@@ -1,292 +1,169 @@
-// ======================
-// Global State
-// ======================
+// ==================== GLOBAL STATE ====================
 let state = JSON.parse(localStorage.getItem("state")) || {
-  racks: {},
+  scanners: {},
   carriers: {},
-  miss: [],
-  settings: { scannerGoal: 400, lastReset: null }
+  racks: {},
+  inspections: []
 };
 
-// Save state
+// Save state to localStorage
 function saveState() {
   localStorage.setItem("state", JSON.stringify(state));
 }
 
-// Format date key
-function dateKey(date = new Date()) {
-  return date.toISOString().split("T")[0];
-}
-
-// ======================
-// Navigation
-// ======================
+// ==================== NAVIGATION ====================
 document.querySelectorAll(".nav-btn").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p => p.style.display = "none");
+    document.getElementById(btn.dataset.panel).style.display = "block";
+
     document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-    document.getElementById(btn.dataset.panel).classList.add("active");
     btn.classList.add("active");
   });
 });
 
-// ======================
-// Date Selector
-// ======================
-const globalDateInput = document.getElementById("globalDate");
-globalDateInput.value = dateKey();
-globalDateInput.addEventListener("change", () => {
-  renderAll();
-});
-
-// ======================
-// Charts Helpers
-// ======================
-Chart.defaults.font.family = "Segoe UI, sans-serif";
-Chart.defaults.plugins.legend.position = "bottom";
-Chart.defaults.plugins.tooltip.callbacks = {
-  label: ctx => `${ctx.label}: ${ctx.formattedValue}`
-};
-
-// Destroy old chart before re-render
-function destroyChart(chartVar) {
-  if (chartVar) chartVar.destroy();
-}
-
-// Chart vars
-let scannerDonutChart, scannerBarChart;
-let carrierDonutChart, carrierBarChart;
-let rackDonuts = [];
-let weeklyRacksChart;
-let classDonutChart, classBarChart;
-let weeklyClassChart, monthlyClassChart;
-
-// ======================
-// API Fetch (via Netlify proxy)
-// ======================
+// ==================== LIVE DATA (API) ====================
+// Pull Detroit Axle API data through Netlify proxy
 async function fetchReturnsData() {
   try {
-    const res = await fetch("/.netlify/functions/returns");
-    return await res.json();
+    const response = await fetch("/.netlify/functions/returns");
+    const data = await response.json();
+
+    // Group by scanner
+    const byScanner = {};
+    const byClassification = {};
+
+    data.forEach(item => {
+      const scanner = item.createdBy || "Unknown";
+      const classification = item.description || "Unclassified";
+
+      if (!byScanner[scanner]) byScanner[scanner] = 0;
+      if (!byClassification[classification]) byClassification[classification] = 0;
+
+      byScanner[scanner]++;
+      byClassification[classification]++;
+    });
+
+    renderScannerCharts(byScanner);
+    renderClassificationCharts(byClassification);
+
+    document.getElementById("scanner-last-updated").textContent =
+      "Last updated: " + new Date().toLocaleTimeString();
+    document.getElementById("class-last-updated").textContent =
+      "Last updated: " + new Date().toLocaleTimeString();
+
   } catch (err) {
-    console.error("API fetch error", err);
-    return [];
+    console.error("Error fetching returns:", err);
   }
 }
 
-// ======================
-// Render Functions
-// ======================
+// Refresh scanners/classifications every 15s
+setInterval(fetchReturnsData, 15000);
+fetchReturnsData();
 
-// --- Scanners ---
-async function renderScanners() {
-  const data = await fetchReturnsData();
-  const selectedDate = globalDateInput.value;
-
-  const filtered = data.filter(r => r.created_at.startsWith(selectedDate));
-  const counts = {};
-  filtered.forEach(r => counts[r.createdBy] = (counts[r.createdBy] || 0) + 1);
-
-  const labels = Object.keys(counts);
-  const values = Object.values(counts);
-
-  destroyChart(scannerDonutChart);
-  scannerDonutChart = new Chart(document.getElementById("scannerDonut"), {
+// ==================== CHART RENDERING ====================
+function renderScannerCharts(data) {
+  const ctx = document.getElementById("scannerDonut").getContext("2d");
+  if (window.scannerChart) window.scannerChart.destroy();
+  window.scannerChart = new Chart(ctx, {
     type: "doughnut",
-    data: { labels, datasets: [{ data: values, backgroundColor: ["#0077c7", "#00c779", "#f4b400", "#db4437"] }] }
+    data: {
+      labels: Object.keys(data),
+      datasets: [{
+        data: Object.values(data),
+        backgroundColor: ["#0077cc", "#00aa55", "#ffaa00", "#cc0000"]
+      }]
+    }
   });
-
-  destroyChart(scannerBarChart);
-  scannerBarChart = new Chart(document.getElementById("scannerBar"), {
-    type: "bar",
-    data: { labels, datasets: [{ label: "Scans", data: values, backgroundColor: "#0077c7" }] }
-  });
-
-  document.getElementById("scannerUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
-  document.getElementById("homeScans").innerText = values.reduce((a, b) => a + b, 0);
 }
 
-// --- Carriers (manual for now) ---
-function renderCarriers() {
-  const selectedDate = globalDateInput.value;
-  const carriers = state.carriers[selectedDate] || { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-
-  const labels = Object.keys(carriers);
-  const values = Object.values(carriers);
-
-  destroyChart(carrierDonutChart);
-  carrierDonutChart = new Chart(document.getElementById("carrierDonut"), {
+function renderClassificationCharts(data) {
+  const ctx = document.getElementById("classDonut").getContext("2d");
+  if (window.classChart) window.classChart.destroy();
+  window.classChart = new Chart(ctx, {
     type: "doughnut",
-    data: { labels, datasets: [{ data: values, backgroundColor: ["#ff5722", "#4caf50", "#2196f3", "#9c27b0"] }] }
+    data: {
+      labels: Object.keys(data),
+      datasets: [{
+        data: Object.values(data),
+        backgroundColor: ["#0077cc", "#00aa55", "#ffaa00", "#cc0000", "#6666ff", "#ff66cc"]
+      }]
+    }
   });
-
-  destroyChart(carrierBarChart);
-  carrierBarChart = new Chart(document.getElementById("carrierBar"), {
-    type: "bar",
-    data: { labels, datasets: [{ label: "Packages", data: values, backgroundColor: "#0077c7" }] }
-  });
-
-  document.getElementById("carrierUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
-  document.getElementById("homeCarriers").innerText = values.reduce((a, b) => a + b, 0);
 }
 
-// --- Racks ---
-document.getElementById("rackForm").addEventListener("submit", e => {
+// ==================== RACKS (MANUAL) ====================
+document.getElementById("rackForm")?.addEventListener("submit", e => {
   e.preventDefault();
-  const selectedDate = globalDateInput.value;
-  state.racks[selectedDate] = {
-    racks: +document.getElementById("racksInput").value,
-    coreRacks: +document.getElementById("coreRacksInput").value,
-    electric: +document.getElementById("electricInput").value,
-    coreElectric: +document.getElementById("coreElectricInput").value,
-    axlesGood: +document.getElementById("axlesGoodInput").value,
-    axlesUsed: +document.getElementById("axlesUsedInput").value,
-    driveGood: +document.getElementById("driveGoodInput").value,
-    driveUsed: +document.getElementById("driveUsedInput").value,
-    gearGood: +document.getElementById("gearGoodInput").value,
-    gearUsed: +document.getElementById("gearUsedInput").value,
+  const today = new Date().toISOString().split("T")[0];
+  state.racks[today] = {
+    racks: +document.getElementById("racks").value,
+    coreRacks: +document.getElementById("coreRacks").value,
+    electric: +document.getElementById("electric").value,
+    coreElectric: +document.getElementById("coreElectric").value,
+    axlesGood: +document.getElementById("axlesGood").value,
+    axlesUsed: +document.getElementById("axlesUsed").value,
+    drivesGood: +document.getElementById("drivesGood").value,
+    drivesUsed: +document.getElementById("drivesUsed").value,
+    gearGood: +document.getElementById("gearGood").value,
+    gearUsed: +document.getElementById("gearUsed").value
   };
   saveState();
-  renderRacks();
+  renderRacksCharts();
 });
 
-document.getElementById("resetRacks").addEventListener("click", () => {
-  if (confirm("Reset racks logs?")) {
-    state.racks = {};
-    state.settings.lastReset = new Date().toLocaleString();
-    saveState();
-    renderRacks();
-  }
-});
-
-function renderRacks() {
-  const selectedDate = globalDateInput.value;
-  const r = state.racks[selectedDate] || {};
-
-  // Daily donuts
-  const configs = [
-    { id: "rackDonut1", data: [r.racks || 0, r.coreRacks || 0], labels: ["Racks", "Core Racks"] },
-    { id: "rackDonut2", data: [r.electric || 0, r.coreElectric || 0], labels: ["Electric", "Core Electric"] },
-    { id: "axleDonut", data: [r.axlesGood || 0, r.axlesUsed || 0], labels: ["Axles Good", "Axles Used"] },
-    { id: "driveDonut", data: [r.driveGood || 0, r.driveUsed || 0], labels: ["Driveshafts Good", "Driveshafts Used"] },
-    { id: "gearDonut", data: [r.gearGood || 0, r.gearUsed || 0], labels: ["Gearboxes Good", "Gearboxes Used"] },
-  ];
-
-  rackDonuts.forEach(c => c.destroy());
-  rackDonuts = configs.map(cfg => new Chart(document.getElementById(cfg.id), {
+function renderRacksCharts() {
+  const today = new Date().toISOString().split("T")[0];
+  const data = state.racks[today] || {};
+  // Example: just 1 donut here, add more like above if needed
+  const ctx = document.getElementById("racksDonut").getContext("2d");
+  if (window.racksChart) window.racksChart.destroy();
+  window.racksChart = new Chart(ctx, {
     type: "doughnut",
-    data: { labels: cfg.labels, datasets: [{ data: cfg.data, backgroundColor: ["#0077c7", "#00c779"] }] }
-  }));
-
-  document.getElementById("rackUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
-  document.getElementById("lastResetNote").innerText = state.settings.lastReset ? "Last reset: " + state.settings.lastReset : "";
+    data: {
+      labels: ["Racks", "Core Racks"],
+      datasets: [{
+        data: [data.racks || 0, data.coreRacks || 0],
+        backgroundColor: ["#0077cc", "#ffaa00"]
+      }]
+    }
+  });
 }
 
-// --- Classifications ---
-async function renderClassifications() {
-  const data = await fetchReturnsData();
-  const selectedDate = globalDateInput.value;
-
-  const filtered = data.filter(r => r.created_at.startsWith(selectedDate));
-  const classes = ["Good", "Used", "Core", "Damage", "Missing", "Not Our Part"];
-  const counts = {};
-  classes.forEach(c => counts[c] = 0);
-  filtered.forEach(r => {
-    if (counts[r.description] !== undefined) counts[r.description]++;
-  });
-
-  const labels = Object.keys(counts);
-  const values = Object.values(counts);
-
-  destroyChart(classDonutChart);
-  classDonutChart = new Chart(document.getElementById("classDonut"), {
-    type: "doughnut",
-    data: { labels, datasets: [{ data: values, backgroundColor: ["#0077c7","#00c779","#f4b400","#db4437","#9c27b0","#795548"] }] }
-  });
-
-  destroyChart(classBarChart);
-  classBarChart = new Chart(document.getElementById("classBar"), {
-    type: "bar",
-    data: { labels, datasets: [{ label: "Items", data: values, backgroundColor: "#0077c7" }] }
-  });
-
-  document.getElementById("classUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
-}
-
-// --- Miss Inspections ---
-document.getElementById("missForm").addEventListener("submit", async e => {
+// ==================== MISS INSPECTIONS ====================
+document.getElementById("missForm")?.addEventListener("submit", async e => {
   e.preventDefault();
-  const tracking = document.getElementById("missTracking").value.trim();
-  const reason = document.getElementById("missReason").value.trim();
-  const log = { tracking, reason, scanner: "AutoFetch", time: new Date().toLocaleString() };
-  state.miss.push(log);
+  const tracking = document.getElementById("missTracking").value;
+  const reason = document.getElementById("missReason").value;
+
+  // Lookup details from API
+  const res = await fetch("/.netlify/functions/returns");
+  const data = await res.json();
+  const found = data.find(r => r.trackingNumber == tracking);
+
+  const scanner = found?.createdBy || "Unknown";
+  const returnId = found?.id;
+
+  // Build photo URLs through proxy
+  const photos = [];
+  if (returnId) {
+    for (let i = 0; i < 5; i++) {
+      photos.push(`/.netlify/functions/photos?id=${returnId}_${i}.jpg`);
+    }
+  }
+
+  // Add to table
+  const row = document.createElement("tr");
+  row.innerHTML = `
+    <td>${tracking}</td>
+    <td>${scanner}</td>
+    <td>${reason}</td>
+    <td>${new Date().toLocaleTimeString()}</td>
+    <td>${photos.map(p => `<img src="${p}" width="50">`).join("")}</td>
+  `;
+  document.getElementById("missTable").appendChild(row);
+
+  state.inspections.push({ tracking, reason, scanner, time: Date.now(), photos });
   saveState();
-  renderMiss();
-  e.target.reset();
 });
 
-function renderMiss() {
-  const tbody = document.getElementById("missLog");
-  tbody.innerHTML = "";
-  state.miss.forEach(log => {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td>${log.tracking}</td><td>${log.scanner}</td><td>${log.reason}</td><td>${log.time}</td><td><button onclick="viewPhotos('${log.tracking}')">View Photos</button></td>`;
-    tbody.appendChild(row);
-  });
-}
-
-// Photo modal (proxy fetch)
-function viewPhotos(tracking) {
-  const modal = document.getElementById("photoModal");
-  const container = document.getElementById("photoContainer");
-  container.innerHTML = `<p>Photos for ${tracking} (via proxy)</p>`;
-  // Example placeholder
-  container.innerHTML += `<img src="/.netlify/functions/photos?id=${tracking}.jpg">`;
-  modal.style.display = "flex";
-}
-
-document.querySelector(".close").onclick = () => {
-  document.getElementById("photoModal").style.display = "none";
-};
-
-// --- Quiz ---
-const quizQuestions = [
-  { q: "What should you do if a part is classified as Damage?", a: "Mark as Damage and attach photo", options: ["Ignore", "Mark as Damage and attach photo", "Classify as Good"] }
-];
-
-function renderQuiz() {
-  const div = document.getElementById("quiz");
-  div.innerHTML = "";
-  quizQuestions.forEach((q, i) => {
-    const opts = q.options.map(o => `<label><input type="radio" name="q${i}" value="${o}"> ${o}</label>`).join("<br>");
-    div.innerHTML += `<p>${q.q}</p>${opts}<hr>`;
-  });
-}
-renderQuiz();
-
-document.getElementById("submitQuiz").addEventListener("click", () => {
-  let score = 0;
-  quizQuestions.forEach((q,i) => {
-    const ans = document.querySelector(`input[name=q${i}]:checked`);
-    if (ans && ans.value === q.a) score++;
-  });
-  document.getElementById("quizResult").innerText = `Score: ${score}/${quizQuestions.length}`;
-});
-
-// ======================
-// Render All
-// ======================
-async function renderAll() {
-  await renderScanners();
-  renderCarriers();
-  renderRacks();
-  await renderClassifications();
-  renderMiss();
-}
-renderAll();
-
-// Auto-refresh (Scanners & Classifications every 15s, others 30s)
-setInterval(renderScanners, 15000);
-setInterval(renderClassifications, 15000);
-setInterval(renderCarriers, 30000);
-setInterval(renderRacks, 30000);
