@@ -1,169 +1,220 @@
-// ==================== GLOBAL STATE ====================
-let state = JSON.parse(localStorage.getItem("state")) || {
-  scanners: {},
-  carriers: {},
-  racks: {},
-  inspections: []
+// Detroit Axle RRPD Dashboard - script.js
+// Handles navigation, API fetch, global date filtering, charts, and logs
+
+let appState = {
+  selectedDate: new Date().toISOString().split("T")[0], // default = today
+  returns: [],
+  racks: JSON.parse(localStorage.getItem("racks")) || {},
+  carriers: JSON.parse(localStorage.getItem("carriers")) || {},
+  missInspections: JSON.parse(localStorage.getItem("missInspections")) || []
 };
 
-// Save state to localStorage
-function saveState() {
-  localStorage.setItem("state", JSON.stringify(state));
-}
+/* ---------------- GLOBAL DATE PICKER ---------------- */
+document.addEventListener("DOMContentLoaded", () => {
+  const dateInput = document.getElementById("datePicker");
+  if (dateInput) {
+    dateInput.value = appState.selectedDate;
+    dateInput.addEventListener("change", e => {
+      appState.selectedDate = e.target.value;
+      refreshAllPanels();
+    });
+  }
 
-// ==================== NAVIGATION ====================
-document.querySelectorAll(".nav-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".panel").forEach(p => p.style.display = "none");
-    document.getElementById(btn.dataset.panel).style.display = "block";
-
-    document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
+  setupNav();
+  refreshAllPanels();
+  setInterval(fetchReturnsData, 15000); // refresh every 15s
 });
 
-// ==================== LIVE DATA (API) ====================
-// Pull Detroit Axle API data through Netlify proxy
+/* ---------------- NAVIGATION ---------------- */
+function setupNav() {
+  const buttons = document.querySelectorAll(".navbar button");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      buttons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      const panels = document.querySelectorAll(".panel");
+      panels.forEach(p => p.classList.remove("active"));
+      document.getElementById(btn.dataset.target).classList.add("active");
+    });
+  });
+}
+
+/* ---------------- FETCH RETURNS (API) ---------------- */
 async function fetchReturnsData() {
   try {
-    const response = await fetch("/.netlify/functions/returns");
-    const data = await response.json();
-
-    // Group by scanner
-    const byScanner = {};
-    const byClassification = {};
-
-    data.forEach(item => {
-      const scanner = item.createdBy || "Unknown";
-      const classification = item.description || "Unclassified";
-
-      if (!byScanner[scanner]) byScanner[scanner] = 0;
-      if (!byClassification[classification]) byClassification[classification] = 0;
-
-      byScanner[scanner]++;
-      byClassification[classification]++;
-    });
-
-    renderScannerCharts(byScanner);
-    renderClassificationCharts(byClassification);
-
-    document.getElementById("scanner-last-updated").textContent =
-      "Last updated: " + new Date().toLocaleTimeString();
-    document.getElementById("class-last-updated").textContent =
-      "Last updated: " + new Date().toLocaleTimeString();
-
+    const res = await fetch("/.netlify/functions/returns");
+    const data = await res.json();
+    appState.returns = data;
+    refreshAllPanels();
+    updateTimestamp("scanners-updated");
+    updateTimestamp("classifications-updated");
   } catch (err) {
     console.error("Error fetching returns:", err);
   }
 }
 
-// Refresh scanners/classifications every 15s
-setInterval(fetchReturnsData, 15000);
-fetchReturnsData();
+/* ---------------- REFRESH ALL PANELS ---------------- */
+function refreshAllPanels() {
+  const filtered = appState.returns.filter(r => {
+    if (!r.created_at) return false;
+    return r.created_at.startsWith(appState.selectedDate);
+  });
 
-// ==================== CHART RENDERING ====================
-function renderScannerCharts(data) {
-  const ctx = document.getElementById("scannerDonut").getContext("2d");
-  if (window.scannerChart) window.scannerChart.destroy();
-  window.scannerChart = new Chart(ctx, {
+  renderScanners(filtered);
+  renderClassifications(filtered);
+  renderRacks();
+  renderCarriers();
+  renderMissInspections();
+}
+
+/* ---------------- SCANNERS PANEL ---------------- */
+function renderScanners(data) {
+  const counts = {};
+  data.forEach(r => {
+    const who = r.created_by || "Unknown";
+    counts[who] = (counts[who] || 0) + 1;
+  });
+
+  const ctx = document.getElementById("scannerChart");
+  if (!ctx) return;
+  if (window.scannerChartObj) window.scannerChartObj.destroy();
+
+  window.scannerChartObj = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: Object.keys(data),
+      labels: Object.keys(counts),
       datasets: [{
-        data: Object.values(data),
-        backgroundColor: ["#0077cc", "#00aa55", "#ffaa00", "#cc0000"]
+        data: Object.values(counts),
+        backgroundColor: ["#66b2ff","#4da6ff","#3399ff","#1a8cff","#0073e6"]
       }]
-    }
+    },
+    options: { responsive: true, plugins: { legend: { position: "bottom" } } }
   });
 }
 
-function renderClassificationCharts(data) {
-  const ctx = document.getElementById("classDonut").getContext("2d");
-  if (window.classChart) window.classChart.destroy();
-  window.classChart = new Chart(ctx, {
+/* ---------------- CLASSIFICATIONS PANEL ---------------- */
+function renderClassifications(data) {
+  const counts = { Good:0, Used:0, Core:0, Damage:0, Missing:0, "Not Our Part":0 };
+
+  data.forEach(r => {
+    let c = (r.description || "").trim();
+    if (counts[c] !== undefined) counts[c]++;
+  });
+
+  const ctx = document.getElementById("classificationChart");
+  if (!ctx) return;
+  if (window.classChartObj) window.classChartObj.destroy();
+
+  window.classChartObj = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: Object.keys(data),
+      labels: Object.keys(counts),
       datasets: [{
-        data: Object.values(data),
-        backgroundColor: ["#0077cc", "#00aa55", "#ffaa00", "#cc0000", "#6666ff", "#ff66cc"]
+        data: Object.values(counts),
+        backgroundColor: ["#2ecc71","#f1c40f","#9b59b6","#e74c3c","#e67e22","#95a5a6"]
       }]
-    }
+    },
+    options: { responsive: true, plugins: { legend: { position: "bottom" } } }
   });
 }
 
-// ==================== RACKS (MANUAL) ====================
-document.getElementById("rackForm")?.addEventListener("submit", e => {
-  e.preventDefault();
-  const today = new Date().toISOString().split("T")[0];
-  state.racks[today] = {
-    racks: +document.getElementById("racks").value,
-    coreRacks: +document.getElementById("coreRacks").value,
-    electric: +document.getElementById("electric").value,
-    coreElectric: +document.getElementById("coreElectric").value,
-    axlesGood: +document.getElementById("axlesGood").value,
-    axlesUsed: +document.getElementById("axlesUsed").value,
-    drivesGood: +document.getElementById("drivesGood").value,
-    drivesUsed: +document.getElementById("drivesUsed").value,
-    gearGood: +document.getElementById("gearGood").value,
-    gearUsed: +document.getElementById("gearUsed").value
-  };
-  saveState();
-  renderRacksCharts();
-});
+/* ---------------- RACKS PANEL ---------------- */
+function renderRacks() {
+  const today = appState.selectedDate;
+  const todayData = appState.racks[today] || { racks:0, coreRacks:0, electric:0, coreElectric:0, axlesGood:0, axlesUsed:0, driveshaftsGood:0, driveshaftsUsed:0, gearboxesGood:0, gearboxesUsed:0 };
 
-function renderRacksCharts() {
-  const today = new Date().toISOString().split("T")[0];
-  const data = state.racks[today] || {};
-  // Example: just 1 donut here, add more like above if needed
-  const ctx = document.getElementById("racksDonut").getContext("2d");
-  if (window.racksChart) window.racksChart.destroy();
-  window.racksChart = new Chart(ctx, {
-    type: "doughnut",
+  const ctx = document.getElementById("racksChart");
+  if (!ctx) return;
+  if (window.racksChartObj) window.racksChartObj.destroy();
+
+  window.racksChartObj = new Chart(ctx, {
+    type: "bar",
     data: {
-      labels: ["Racks", "Core Racks"],
+      labels: Object.keys(todayData),
       datasets: [{
-        data: [data.racks || 0, data.coreRacks || 0],
-        backgroundColor: ["#0077cc", "#ffaa00"]
+        data: Object.values(todayData),
+        backgroundColor: "#0073e6"
       }]
-    }
+    },
+    options: { responsive: true, plugins: { legend: { display: false } } }
   });
 }
 
-// ==================== MISS INSPECTIONS ====================
-document.getElementById("missForm")?.addEventListener("submit", async e => {
-  e.preventDefault();
-  const tracking = document.getElementById("missTracking").value;
-  const reason = document.getElementById("missReason").value;
+/* ---------------- CARRIERS PANEL ---------------- */
+function renderCarriers() {
+  const today = appState.selectedDate;
+  const todayData = appState.carriers[today] || { FedEx:0, UPS:0, USPS:0 };
 
-  // Lookup details from API
-  const res = await fetch("/.netlify/functions/returns");
-  const data = await res.json();
-  const found = data.find(r => r.trackingNumber == tracking);
+  const ctx = document.getElementById("carrierChart");
+  if (!ctx) return;
+  if (window.carrierChartObj) window.carrierChartObj.destroy();
 
-  const scanner = found?.createdBy || "Unknown";
-  const returnId = found?.id;
+  window.carrierChartObj = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: Object.keys(todayData),
+      datasets: [{
+        data: Object.values(todayData),
+        backgroundColor: ["#ff4d4d","#ffa64d","#66b2ff"]
+      }]
+    },
+    options: { responsive: true, plugins: { legend: { display: false } } }
+  });
+}
 
-  // Build photo URLs through proxy
-  const photos = [];
-  if (returnId) {
-    for (let i = 0; i < 5; i++) {
-      photos.push(`/.netlify/functions/photos?id=${returnId}_${i}.jpg`);
+/* ---------------- MISS INSPECTIONS ---------------- */
+function renderMissInspections() {
+  const tbody = document.querySelector("#missTable tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  const today = appState.selectedDate;
+  appState.missInspections.filter(m => m.date === today).forEach(m => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${m.track_number}</td>
+      <td>${m.scanner}</td>
+      <td>${m.reason}</td>
+      <td>${m.date}</td>
+      <td><button onclick="viewPhotos('${m.track_number}')">View Photos</button></td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+async function viewPhotos(trackNumber) {
+  const modal = document.getElementById("photoModal");
+  const body = document.getElementById("photoModalBody");
+  modal.style.display = "block";
+  body.innerHTML = "<p>Loading photos...</p>";
+
+  try {
+    // fetch via proxy, expects tracking-based images
+    const res = await fetch(`/.netlify/functions/photos?id=${trackNumber}`);
+    const data = await res.json();
+
+    body.innerHTML = "";
+    if (data && data.photos && data.photos.length) {
+      data.photos.forEach(url => {
+        const img = document.createElement("img");
+        img.src = url;
+        body.appendChild(img);
+      });
+    } else {
+      body.innerHTML = "<p>No photos found for this tracking number.</p>";
     }
+  } catch (err) {
+    console.error(err);
+    body.innerHTML = "<p>Error loading photos.</p>";
   }
+}
 
-  // Add to table
-  const row = document.createElement("tr");
-  row.innerHTML = `
-    <td>${tracking}</td>
-    <td>${scanner}</td>
-    <td>${reason}</td>
-    <td>${new Date().toLocaleTimeString()}</td>
-    <td>${photos.map(p => `<img src="${p}" width="50">`).join("")}</td>
-  `;
-  document.getElementById("missTable").appendChild(row);
-
-  state.inspections.push({ tracking, reason, scanner, time: Date.now(), photos });
-  saveState();
-});
-
+/* ---------------- TIMESTAMP ---------------- */
+function updateTimestamp(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    const now = new Date();
+    el.innerText = "Last updated: " + now.toLocaleTimeString();
+  }
+}
