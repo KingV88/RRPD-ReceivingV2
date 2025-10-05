@@ -1,304 +1,178 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Detroit Axle — RRPD Receiving</title>
-
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
-  <!-- pdf.js (for FedEx manifest parsing) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
-
-  <!-- Styles -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Detroit Axle RRPD Receiving Dashboard</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+  <!-- Top Bar -->
   <header class="topbar">
-    <div class="brand">
-      <img src="detroit-axle-logo.png" alt="Detroit Axle" class="logo">
-      <span>RRPD Receiving</span>
-    </div>
-    <nav class="nav">
-      <button class="nav-btn active" data-target="home">Home</button>
-      <button class="nav-btn" data-target="scanners">Scanners</button>
-      <button class="nav-btn" data-target="carriers">Carriers</button>
-      <button class="nav-btn" data-target="racks">Racks</button>
-      <button class="nav-btn" data-target="classifications">Classifications</button>
-      <button class="nav-btn" data-target="miss">Miss Inspections</button>
-      <button class="nav-btn" data-target="training">Training & Quiz</button>
-      <button class="nav-btn" data-target="manifest" id="manifestTab" style="display:none;">Manifest</button>
-      <button class="nav-btn" data-target="settings">Settings</button>
+    <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo">
+    <h1>RRPD Receiving Dashboard</h1>
+    <nav>
+      <button class="nav-btn" data-panel="home">Home</button>
+      <button class="nav-btn" data-panel="scanners">Scanners</button>
+      <button class="nav-btn" data-panel="carriers">Carriers</button>
+      <button class="nav-btn" data-panel="racks">Racks</button>
+      <button class="nav-btn" data-panel="classifications">Classifications</button>
+      <button class="nav-btn" data-panel="miss">Miss Inspections</button>
+      <button class="nav-btn" data-panel="training">Training & Quiz</button>
+      <button class="nav-btn" data-panel="manifest">Manifest Upload</button>
+      <button class="nav-btn" data-panel="settings">Settings</button>
     </nav>
-    <div class="right">
-      <span id="clock"></span>
-      <span class="dot">•</span>
-      <span id="admin_hint">—</span>
+    <!-- Global Date Selector -->
+    <div class="date-select">
+      <label for="globalDate">Select Date:</label>
+      <input type="date" id="globalDate">
     </div>
   </header>
 
-  <main class="wrap">
-    <!-- HOME -->
+  <!-- Panels -->
+  <main>
+    <!-- Home Panel -->
     <section id="home" class="panel active">
-      <div class="grid2">
-        <div class="card">
-          <h3>Today — Scanner Goal</h3>
-          <div id="goal_info" class="muted small">Set in Settings</div>
-          <div class="progress">
-            <div id="goal_bar" class="progress-bar" style="width:0%"></div>
-          </div>
-          <div id="goal_nums" class="bigline"></div>
-        </div>
-        <div class="card">
-          <h3>Today — Received vs Scanned</h3>
-          <div class="canvas-card"><canvas id="ratio_today"></canvas></div>
-        </div>
+      <h2>Home Dashboard</h2>
+      <div class="summary-cards">
+        <div class="card"><h3>Scans Today</h3><p id="homeScans">0</p></div>
+        <div class="card"><h3>Carriers Today</h3><p id="homeCarriers">0</p></div>
+        <div class="card"><h3>Miss Inspections</h3><p id="homeMiss">0</p></div>
       </div>
-
-      <div class="grid2">
-        <div class="card">
-          <h3>Weekly — Scanners</h3>
-          <div class="canvas-card"><canvas id="weekly_scanners"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Weekly — Carriers</h3>
-          <div class="canvas-card"><canvas id="weekly_carriers"></canvas></div>
-        </div>
+      <div class="chart-container">
+        <canvas id="weeklyClassChart"></canvas>
       </div>
-
-      <div class="card">
-        <h3>Monthly — Classifications (last 30 days)</h3>
-        <div class="canvas-card"><canvas id="monthly_class"></canvas></div>
+      <div class="chart-container">
+        <canvas id="monthlyClassChart"></canvas>
       </div>
     </section>
 
-    <!-- SCANNERS -->
+    <!-- Scanners Panel -->
     <section id="scanners" class="panel">
-      <div class="grid2">
-        <div class="card">
-          <h3>Today — Scans per Scanner</h3>
-          <div class="canvas-card"><canvas id="scanner_donut_today"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Today — Scans per Scanner (Bars)</h3>
-          <div class="canvas-card"><canvas id="scanner_bar_today"></canvas></div>
-        </div>
+      <h2>Scanners</h2>
+      <div class="chart-row">
+        <canvas id="scannerDonut"></canvas>
+        <canvas id="scannerBar"></canvas>
       </div>
-
-      <div class="card">
-        <h3>Filtered Total Scans (last N days)</h3>
-        <div class="form-row">
-          <label>Scanners</label>
-          <select id="scannerFilter" multiple size="4" class="wide"></select>
-          <label>Days
-            <select id="daysBack">
-              <option value="7" selected>7</option>
-              <option value="14">14</option>
-              <option value="30">30</option>
-            </select>
-          </label>
-          <button id="refreshScannerChart" class="btn">Refresh</button>
-        </div>
-        <div class="canvas-card"><canvas id="scanners_total_chart"></canvas></div>
-      </div>
+      <p class="last-updated" id="scannerUpdated"></p>
     </section>
 
-    <!-- CARRIERS -->
+    <!-- Carriers Panel -->
     <section id="carriers" class="panel">
-      <div class="card">
-        <h3>Daily Input — Carriers</h3>
-        <div class="form-row">
-          <input id="cr_date" type="date">
-          <input id="cr_fedex" type="number" placeholder="FedEx">
-          <input id="cr_ups" type="number" placeholder="UPS">
-          <input id="cr_usps" type="number" placeholder="USPS">
-          <input id="cr_other" type="number" placeholder="Other">
-          <button id="cr_save" class="btn">Save</button>
-        </div>
+      <h2>Carriers</h2>
+      <div class="chart-row">
+        <canvas id="carrierDonut"></canvas>
+        <canvas id="carrierBar"></canvas>
       </div>
-      <div class="grid2">
-        <div class="card">
-          <h3>Today — Carrier Split</h3>
-          <div class="canvas-card"><canvas id="carrier_donut_today"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Today — Carrier Totals</h3>
-          <div class="canvas-card"><canvas id="carrier_bar_today"></canvas></div>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Recent Entries</h3>
-        <div id="carrier_table" class="table-wrap"></div>
-      </div>
+      <p class="last-updated" id="carrierUpdated"></p>
     </section>
 
-    <!-- RACKS -->
+    <!-- Racks Panel -->
     <section id="racks" class="panel">
-      <div class="card">
-        <h3>Daily Input — Racks & Parts</h3>
-        <div class="form-row">
-          <input id="rk_date" type="date">
-          <input id="rk_racks" type="number" placeholder="Racks (Good)">
-          <input id="rk_racks_core" type="number" placeholder="Racks (Core)">
-          <input id="rk_eracks" type="number" placeholder="Electric Racks (Good)">
-          <input id="rk_eracks_core" type="number" placeholder="Electric Racks (Core)">
-          <input id="rk_ax_good" type="number" placeholder="Axles (Good)">
-          <input id="rk_ax_used" type="number" placeholder="Axles (Used)">
-          <input id="rk_ds_good" type="number" placeholder="Drive Shafts (Good)">
-          <input id="rk_ds_used" type="number" placeholder="Drive Shafts (Used)">
-          <input id="rk_gb_good" type="number" placeholder="Gearboxes (Good)">
-          <input id="rk_gb_used" type="number" placeholder="Gearboxes (Used)">
-          <button id="rk_save" class="btn">Save</button>
-        </div>
+      <h2>Racks</h2>
+      <form id="rackForm">
+        <label>Racks: <input type="number" id="racksInput" value="0"></label>
+        <label>Core Racks: <input type="number" id="coreRacksInput" value="0"></label>
+        <label>Electric Racks: <input type="number" id="electricInput" value="0"></label>
+        <label>Core Electric: <input type="number" id="coreElectricInput" value="0"></label>
+        <label>Axles Good: <input type="number" id="axlesGoodInput" value="0"></label>
+        <label>Axles Used: <input type="number" id="axlesUsedInput" value="0"></label>
+        <label>Driveshafts Good: <input type="number" id="driveGoodInput" value="0"></label>
+        <label>Driveshafts Used: <input type="number" id="driveUsedInput" value="0"></label>
+        <label>Gearboxes Good: <input type="number" id="gearGoodInput" value="0"></label>
+        <label>Gearboxes Used: <input type="number" id="gearUsedInput" value="0"></label>
+        <button type="submit">Save</button>
+      </form>
+      <button id="resetRacks">Reset Racks Logs</button>
+      <p id="lastResetNote"></p>
+      <div class="chart-row">
+        <canvas id="rackDonut1"></canvas>
+        <canvas id="rackDonut2"></canvas>
+        <canvas id="axleDonut"></canvas>
+        <canvas id="driveDonut"></canvas>
+        <canvas id="gearDonut"></canvas>
       </div>
-
-      <div class="grid3">
-        <div class="card"><h3>Racks</h3><canvas id="d_racks"></canvas></div>
-        <div class="card"><h3>Electric Racks</h3><canvas id="d_eracks"></canvas></div>
-        <div class="card"><h3>Axles</h3><canvas id="d_axles"></canvas></div>
-        <div class="card"><h3>Drive Shafts</h3><canvas id="d_ds"></canvas></div>
-        <div class="card"><h3>Gearboxes</h3><canvas id="d_gb"></canvas></div>
+      <div class="chart-container">
+        <canvas id="weeklyRacksChart"></canvas>
       </div>
-
-      <div class="card">
-        <h3>Recent Entries</h3>
-        <div id="racks_table" class="table-wrap"></div>
-      </div>
+      <p class="last-updated" id="rackUpdated"></p>
     </section>
 
-    <!-- CLASSIFICATIONS -->
+    <!-- Classifications Panel -->
     <section id="classifications" class="panel">
-      <div class="grid2">
-        <div class="card">
-          <h3>Today — Classification Split</h3>
-          <div class="canvas-card"><canvas id="class_donut_today"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Today — Classification Bars</h3>
-          <div class="canvas-card"><canvas id="class_bar_today"></canvas></div>
-        </div>
+      <h2>Classifications</h2>
+      <div class="chart-row">
+        <canvas id="classDonut"></canvas>
+        <canvas id="classBar"></canvas>
       </div>
-
-      <div class="card">
-        <h3>Today — Detail</h3>
-        <div id="class_table" class="table-wrap"></div>
-      </div>
+      <p class="last-updated" id="classUpdated"></p>
     </section>
 
-    <!-- MISS INSPECTIONS -->
+    <!-- Miss Inspections -->
     <section id="miss" class="panel">
-      <div class="card">
-        <h3>Log Miss Inspection</h3>
-        <form id="missForm" class="form-row">
-          <input type="text" id="missTrack" placeholder="Tracking Number" required>
-          <input type="text" id="missReason" placeholder="Reason (manual)" required>
-          <button type="submit" class="btn">Save</button>
-        </form>
-      </div>
-      <div class="card">
-        <h3>Miss Inspections</h3>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Tracking #</th>
-              <th>Scanner</th>
-              <th>Reason</th>
-              <th>Time</th>
-              <th>Photos</th>
-            </tr>
-          </thead>
-          <tbody id="missTableBody"></tbody>
-        </table>
-      </div>
+      <h2>Miss Inspections</h2>
+      <form id="missForm">
+        <label>Tracking #: <input type="text" id="missTracking" required></label>
+        <label>Reason: <input type="text" id="missReason" required></label>
+        <button type="submit">Add</button>
+      </form>
+      <table>
+        <thead>
+          <tr><th>Tracking #</th><th>Scanner</th><th>Reason</th><th>Time</th><th>Photos</th></tr>
+        </thead>
+        <tbody id="missLog"></tbody>
+      </table>
     </section>
 
-    <!-- TRAINING & QUIZ -->
+    <!-- Training & Quiz -->
     <section id="training" class="panel">
-      <div class="card">
-        <h3>Returns Training Manual (EN + ES)</h3>
-        <div id="manual_en_es" class="manual"></div>
-        <button id="printManual" class="btn" style="margin-top:10px;">Print Manual</button>
+      <h2>Training Manual (English / Español)</h2>
+      <div class="manual">
+        <h3>Step 1: Verify Package / Paso 1: Verificar Paquete</h3>
+        <p>Check tracking number... / Revise el número de seguimiento...</p>
+        <h3>Step 2: Classify / Paso 2: Clasificar</h3>
+        <p>Good, Used, Core, Damage... / Bueno, Usado, Núcleo, Daño...</p>
       </div>
-
-      <div class="card">
-        <h3>Bilingual Quiz</h3>
-        <div id="quiz_area"></div>
-        <button id="start_quiz" class="btn">Start Quiz</button>
-        <div id="quiz_result" class="bigline"></div>
-      </div>
+      <h2>Training Quiz / Examen de Entrenamiento</h2>
+      <div id="quiz"></div>
+      <button id="submitQuiz">Submit / Enviar</button>
+      <p id="quizResult"></p>
     </section>
 
-    <!-- MANIFEST (ADMIN ONLY) -->
+    <!-- Manifest Upload -->
     <section id="manifest" class="panel">
-      <div class="card">
-        <h3>FedEx Manifest Verification (Admin)</h3>
-        <div class="form-row">
-          <input type="file" id="manifestUpload" accept="application/pdf">
-          <button id="processManifestBtn" class="btn">Process Manifest</button>
-        </div>
-        <div class="grid4">
-          <div class="stat">Expected<br><span id="manifestTotal">0</span></div>
-          <div class="stat">Scanned<br><span id="manifestScanned">0</span></div>
-          <div class="stat">Missing<br><span id="manifestMissing">0</span></div>
-          <div class="stat">Extras<br><span id="manifestExtra">0</span></div>
-        </div>
-        <div class="canvas-card"><canvas id="manifestChart"></canvas></div>
+      <h2>FedEx Manifest Upload (Admin Only)</h2>
+      <input type="file" id="manifestFile" accept=".pdf">
+      <button id="processManifest">Process</button>
+      <div class="chart-container">
+        <canvas id="manifestDonut"></canvas>
       </div>
-
-      <div class="card">
-        <h3>Missing Tracking Numbers (FedEx only)</h3>
-        <table class="table">
-          <thead><tr><th>Tracking #</th></tr></thead>
-          <tbody id="missingList"></tbody>
-        </table>
-      </div>
+      <table>
+        <thead><tr><th>Missing Tracking #</th></tr></thead>
+        <tbody id="manifestMissing"></tbody>
+      </table>
     </section>
 
-    <!-- SETTINGS -->
+    <!-- Settings -->
     <section id="settings" class="panel">
-      <div class="card">
-        <h3>Admin</h3>
-        <div class="form-row">
-          <input id="admin_user" placeholder="User">
-          <input id="admin_pass" placeholder="Password" type="password">
-          <button id="admin_login" class="btn">Login</button>
-          <button id="admin_logout" class="btn alt" style="display:none;">Logout</button>
-        </div>
-      </div>
-
-      <div id="admin_only" style="display:none;">
-        <div class="card">
-          <h3>Scanner Daily Goal</h3>
-          <div class="form-row">
-            <input id="goal_scanners" type="number" placeholder="Target scans per day">
-            <button id="save_goal" class="btn">Save</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>Print Daily Report</h3>
-          <button id="printReport" class="btn">Print</button>
-        </div>
-      </div>
+      <h2>Settings</h2>
+      <form id="goalForm">
+        <label>Scanner Daily Goal: <input type="number" id="scannerGoalInput" value="400"></label>
+        <button type="submit">Save Goal</button>
+      </form>
+      <button id="printReport">Print Daily Report</button>
     </section>
   </main>
 
-  <!-- Toast -->
-  <div id="toast" class="toast"></div>
-
-  <!-- Photos Modal -->
-  <div id="photosModal" class="modal">
+  <!-- Modal for Miss Inspection Photos -->
+  <div id="photoModal" class="modal">
     <div class="modal-content">
-      <span class="close" id="photosClose">&times;</span>
-      <div id="photosModalBody">Loading...</div>
+      <span class="close">&times;</span>
+      <div id="photoContainer"></div>
     </div>
   </div>
 
-  <footer class="footer">Detroit Axle • RRPD Receiving</footer>
-
-  <!-- App -->
   <script src="script.js"></script>
 </body>
 </html>
