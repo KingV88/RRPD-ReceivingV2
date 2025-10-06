@@ -1,208 +1,235 @@
-// Detroit Axle RRPD Dashboard - script.js
-// Handles navigation, API fetch, global date filtering, charts, and logs
-
-let appState = {
-  selectedDate: new Date().toISOString().split("T")[0], // default = today
-  returns: [],
+// -------------------------
+// GLOBAL STATE
+// -------------------------
+const appState = {
+  selectedDate: new Date().toISOString().slice(0, 10), // default today
   racks: JSON.parse(localStorage.getItem("racks")) || {},
   carriers: JSON.parse(localStorage.getItem("carriers")) || {},
   missInspections: JSON.parse(localStorage.getItem("missInspections")) || []
 };
 
-/* ---------------- GLOBAL DATE PICKER ---------------- */
-document.addEventListener("DOMContentLoaded", () => {
-  const dateInput = document.getElementById("datePicker");
-  if (dateInput) {
-    dateInput.value = appState.selectedDate;
-    dateInput.addEventListener("change", e => {
-      appState.selectedDate = e.target.value;
-      refreshAllPanels();
-    });
-  }
-
-  setupNav();
-  refreshAllPanels();
-  setInterval(fetchReturnsData, 15000); // refresh every 15s
+// -------------------------
+// NAVIGATION
+// -------------------------
+document.querySelectorAll(".nav-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const panel = btn.getAttribute("data-panel");
+    document.querySelectorAll(".panel").forEach(p => p.style.display = "none");
+    document.getElementById(panel).style.display = "block";
+  });
 });
 
-/* ---------------- NAVIGATION ---------------- */
-function setupNav() {
-  const buttons = document.querySelectorAll(".navbar button");
-  buttons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      buttons.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
+// -------------------------
+// DATE PICKER
+// -------------------------
+document.getElementById("datePicker").value = appState.selectedDate;
+document.getElementById("datePicker").addEventListener("change", (e) => {
+  appState.selectedDate = e.target.value;
+  refreshAll();
+});
 
-      const panels = document.querySelectorAll(".panel");
-      panels.forEach(p => p.classList.remove("active"));
-      document.getElementById(btn.dataset.target).classList.add("active");
-    });
-  });
-}
-
-/* ---------------- FETCH RETURNS (API) ---------------- */
+// -------------------------
+// FETCH RETURNS API
+// -------------------------
 async function fetchReturnsData() {
   try {
     const res = await fetch("/.netlify/functions/returns");
     const data = await res.json();
-    appState.returns = data;
-    refreshAllPanels();
-    updateTimestamp("scanners-updated");
-    updateTimestamp("classifications-updated");
+    return data.filter(r => r.created_at.startsWith(appState.selectedDate));
   } catch (err) {
-    console.error("Error fetching returns:", err);
+    console.error("API error:", err);
+    return [];
   }
 }
 
-/* ---------------- REFRESH ALL PANELS ---------------- */
-function refreshAllPanels() {
-  const filtered = appState.returns.filter(r => {
-    if (!r.created_at) return false;
-    return r.created_at.startsWith(appState.selectedDate);
-  });
+// -------------------------
+// SCANNERS + CLASSIFICATIONS
+// -------------------------
+let scannerChart, classificationChart;
 
-  renderScanners(filtered);
-  renderClassifications(filtered);
-  renderRacks();
-  renderCarriers();
-  renderMissInspections();
-}
-
-/* ---------------- SCANNERS PANEL ---------------- */
-function renderScanners(data) {
+async function renderScanners() {
+  const data = await fetchReturnsData();
   const counts = {};
   data.forEach(r => {
-    const who = r.created_by || "Unknown";
-    counts[who] = (counts[who] || 0) + 1;
+    const user = r.created_by || "Unknown";
+    counts[user] = (counts[user] || 0) + 1;
   });
 
-  const ctx = document.getElementById("scannerChart");
-  if (!ctx) return;
-  if (window.scannerChartObj) window.scannerChartObj.destroy();
-
-  window.scannerChartObj = new Chart(ctx, {
+  const ctx = document.getElementById("scannerDonut").getContext("2d");
+  if (scannerChart) scannerChart.destroy();
+  scannerChart = new Chart(ctx, {
     type: "doughnut",
     data: {
       labels: Object.keys(counts),
       datasets: [{
         data: Object.values(counts),
-        backgroundColor: ["#66b2ff","#4da6ff","#3399ff","#1a8cff","#0073e6"]
+        backgroundColor: ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd"]
       }]
-    },
-    options: { responsive: true, plugins: { legend: { position: "bottom" } } }
+    }
   });
+
+  document.getElementById("scannerUpdated").innerText =
+    "Last updated: " + new Date().toLocaleTimeString();
 }
 
-/* ---------------- CLASSIFICATIONS PANEL ---------------- */
-function renderClassifications(data) {
-  const counts = { Good:0, Used:0, Core:0, Damage:0, Missing:0, "Not Our Part":0 };
+async function renderClassifications() {
+  const data = await fetchReturnsData();
+  const cats = ["Good","Used","Core","Damage","Missing","Not Our Part"];
+  const counts = Object.fromEntries(cats.map(c => [c, 0]));
 
   data.forEach(r => {
-    let c = (r.description || "").trim();
-    if (counts[c] !== undefined) counts[c]++;
+    if (cats.includes(r.description)) counts[r.description] += 1;
   });
 
-  const ctx = document.getElementById("classificationChart");
-  if (!ctx) return;
-  if (window.classChartObj) window.classChartObj.destroy();
-
-  window.classChartObj = new Chart(ctx, {
+  const ctx = document.getElementById("classDonut").getContext("2d");
+  if (classificationChart) classificationChart.destroy();
+  classificationChart = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: Object.keys(counts),
+      labels: cats,
       datasets: [{
         data: Object.values(counts),
-        backgroundColor: ["#2ecc71","#f1c40f","#9b59b6","#e74c3c","#e67e22","#95a5a6"]
+        backgroundColor: ["#2ca02c","#ff7f0e","#1f77b4","#d62728","#8c564b","#9467bd"]
       }]
-    },
-    options: { responsive: true, plugins: { legend: { position: "bottom" } } }
+    }
   });
+
+  document.getElementById("classUpdated").innerText =
+    "Last updated: " + new Date().toLocaleTimeString();
 }
 
-/* ---------------- RACKS PANEL ---------------- */
+// -------------------------
+// RACKS (manual)
+// -------------------------
+document.getElementById("rackForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const today = appState.selectedDate;
+  const racksData = {
+    racks: +document.getElementById("racks").value || 0,
+    coreRacks: +document.getElementById("coreRacks").value || 0,
+    electric: +document.getElementById("electric").value || 0,
+    coreElectric: +document.getElementById("coreElectric").value || 0,
+    axlesGood: +document.getElementById("axlesGood").value || 0,
+    axlesUsed: +document.getElementById("axlesUsed").value || 0,
+    driveshaftsGood: +document.getElementById("driveshaftsGood").value || 0,
+    driveshaftsUsed: +document.getElementById("driveshaftsUsed").value || 0,
+    gearboxesGood: +document.getElementById("gearboxesGood").value || 0,
+    gearboxesUsed: +document.getElementById("gearboxesUsed").value || 0
+  };
+  appState.racks[today] = racksData;
+  localStorage.setItem("racks", JSON.stringify(appState.racks));
+  renderRacks();
+  e.target.reset();
+});
+
 function renderRacks() {
   const today = appState.selectedDate;
-  const todayData = appState.racks[today] || { racks:0, coreRacks:0, electric:0, coreElectric:0, axlesGood:0, axlesUsed:0, driveshaftsGood:0, driveshaftsUsed:0, gearboxesGood:0, gearboxesUsed:0 };
+  const data = appState.racks[today];
+  if (!data) return;
 
-  const ctx = document.getElementById("racksChart");
-  if (!ctx) return;
-  if (window.racksChartObj) window.racksChartObj.destroy();
-
-  window.racksChartObj = new Chart(ctx, {
-    type: "bar",
+  const ctx = document.getElementById("racksDonut").getContext("2d");
+  new Chart(ctx, {
+    type: "doughnut",
     data: {
-      labels: Object.keys(todayData),
+      labels: ["Racks","Core Racks","Electric","Core Electric",
+               "Axles Good","Axles Used","Driveshafts Good","Driveshafts Used",
+               "Gearboxes Good","Gearboxes Used"],
       datasets: [{
-        data: Object.values(todayData),
-        backgroundColor: "#0073e6"
+        data: Object.values(data),
+        backgroundColor: ["#1f77b4","#aec7e8","#ff7f0e","#ffbb78",
+                          "#2ca02c","#98df8a","#d62728","#ff9896",
+                          "#9467bd","#c5b0d5"]
       }]
-    },
-    options: { responsive: true, plugins: { legend: { display: false } } }
+    }
   });
+  document.getElementById("racksUpdated").innerText =
+    "Last updated: " + new Date().toLocaleTimeString();
 }
 
-/* ---------------- CARRIERS PANEL ---------------- */
-function renderCarriers() {
+// -------------------------
+// MISS INSPECTIONS
+// -------------------------
+document.getElementById("missForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const trackingNumber = document.getElementById("missTracking").value.trim();
+  const reason = document.getElementById("missReason").value.trim();
   const today = appState.selectedDate;
-  const todayData = appState.carriers[today] || { FedEx:0, UPS:0, USPS:0 };
 
-  const ctx = document.getElementById("carrierChart");
-  if (!ctx) return;
-  if (window.carrierChartObj) window.carrierChartObj.destroy();
+  if (!trackingNumber || !reason) return;
 
-  window.carrierChartObj = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: Object.keys(todayData),
-      datasets: [{
-        data: Object.values(todayData),
-        backgroundColor: ["#ff4d4d","#ffa64d","#66b2ff"]
-      }]
-    },
-    options: { responsive: true, plugins: { legend: { display: false } } }
-  });
-}
+  let returnId = null;
+  let scanner = "Unknown";
 
-/* ---------------- MISS INSPECTIONS ---------------- */
+  try {
+    const res = await fetch("/.netlify/functions/returns");
+    const data = await res.json();
+    const match = data.find(r => r.tracking_number === trackingNumber);
+    if (match) {
+      returnId = match.id;
+      scanner = match.created_by || "Unknown";
+    }
+  } catch (err) {
+    console.error("Lookup failed:", err);
+  }
+
+  const entry = { track_number: trackingNumber, return_id: returnId, scanner, reason, date: today };
+  appState.missInspections.push(entry);
+  localStorage.setItem("missInspections", JSON.stringify(appState.missInspections));
+
+  renderMissInspections();
+  e.target.reset();
+});
+
 function renderMissInspections() {
   const tbody = document.querySelector("#missTable tbody");
-  if (!tbody) return;
   tbody.innerHTML = "";
 
-  const today = appState.selectedDate;
-  appState.missInspections.filter(m => m.date === today).forEach(m => {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${m.track_number}</td>
-      <td>${m.scanner}</td>
-      <td>${m.reason}</td>
-      <td>${m.date}</td>
-      <td><button onclick="viewPhotos('${m.track_number}')">View Photos</button></td>
-    `;
-    tbody.appendChild(row);
-  });
+  appState.missInspections
+    .filter(m => m.date === appState.selectedDate)
+    .forEach((m) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${m.track_number || "—"}</td>
+        <td>${m.return_id || "—"}</td>
+        <td>${m.scanner || "Unknown"}</td>
+        <td>${m.reason}</td>
+        <td>${m.date}</td>
+        <td><button onclick="viewPhotos('${m.track_number}','${m.return_id}')">View</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
 }
 
-async function viewPhotos(trackNumber) {
+async function viewPhotos(trackNumber, returnId) {
   const modal = document.getElementById("photoModal");
   const body = document.getElementById("photoModalBody");
   modal.style.display = "block";
   body.innerHTML = "<p>Loading photos...</p>";
 
+  const candidates = [];
+  if (trackNumber) candidates.push(trackNumber);
+  if (returnId) candidates.push(returnId);
+
   try {
-    // fetch via proxy, expects tracking-based images
-    const res = await fetch(`/.netlify/functions/photos?id=${trackNumber}`);
-    const data = await res.json();
+    let photos = [];
+    for (const id of candidates) {
+      const res = await fetch(`/.netlify/functions/photos?id=${id}`);
+      const data = await res.json();
+      if (data.photos && data.photos.length) {
+        photos = photos.concat(data.photos);
+      }
+    }
 
     body.innerHTML = "";
-    if (data && data.photos && data.photos.length) {
-      data.photos.forEach(url => {
+    if (photos.length) {
+      photos.forEach(url => {
         const img = document.createElement("img");
         img.src = url;
         body.appendChild(img);
       });
     } else {
-      body.innerHTML = "<p>No photos found for this tracking number.</p>";
+      body.innerHTML = "<p>No photos found for this entry.</p>";
     }
   } catch (err) {
     console.error(err);
@@ -210,11 +237,17 @@ async function viewPhotos(trackNumber) {
   }
 }
 
-/* ---------------- TIMESTAMP ---------------- */
-function updateTimestamp(id) {
-  const el = document.getElementById(id);
-  if (el) {
-    const now = new Date();
-    el.innerText = "Last updated: " + now.toLocaleTimeString();
-  }
+// -------------------------
+// REFRESH LOOP
+// -------------------------
+function refreshAll() {
+  renderScanners();
+  renderClassifications();
+  renderRacks();
+  renderMissInspections();
 }
+
+refreshAll();
+setInterval(renderScanners, 15000);
+setInterval(renderClassifications, 15000);
+setInterval(renderRacks, 30000);
