@@ -1,250 +1,272 @@
-/* -----------------------------
+/* ===========================
    Global State & Helpers
------------------------------- */
-let appState = {
-  inspections: JSON.parse(localStorage.getItem("inspections")) || [],
-  racks: JSON.parse(localStorage.getItem("racks")) || [],
-  carriers: JSON.parse(localStorage.getItem("carriers")) || []
+=========================== */
+let state = {
+  racks: JSON.parse(localStorage.getItem("racksData")) || {},
+  carriers: JSON.parse(localStorage.getItem("carriersData")) || {},
+  inspections: JSON.parse(localStorage.getItem("missInspections")) || [],
 };
 
-// Get selected date (fallback = today)
 function getSelectedDate() {
-  const picker = document.getElementById("globalDate");
-  if (picker && picker.value) return picker.value;
-  return new Date().toISOString().split("T")[0];
+  const input = document.getElementById("globalDate");
+  if (!input) return new Date().toISOString().split("T")[0];
+  return input.value || new Date().toISOString().split("T")[0];
 }
 
-/* -----------------------------
-   API Fetch via Netlify Function
------------------------------- */
-async function fetchReturnsData() {
+function formatDateForHeader(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+
+/* ===========================
+   Navigation
+=========================== */
+function showPanel(id) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+
+  document.querySelectorAll(".navbar button").forEach(b => b.classList.remove("active"));
+  document.querySelector(`.navbar button[data-target='${id}']`).classList.add("active");
+}
+
+/* ===========================
+   Data Fetch (via Netlify)
+=========================== */
+async function fetchReturns() {
   const date = getSelectedDate();
   try {
     const res = await fetch(`/.netlify/functions/returns?date=${date}`);
-    if (!res.ok) throw new Error(`Error ${res.status}`);
+    if (!res.ok) throw new Error("Failed to fetch returns");
     return await res.json();
   } catch (err) {
-    console.error("Fetch error:", err);
+    console.error("Error fetching returns:", err);
     return [];
   }
 }
 
-/* -----------------------------
-   Refresh Panels
------------------------------- */
-async function refreshAllPanels() {
-  const data = await fetchReturnsData();
-  renderScanners(data);
-  renderClassifications(data);
-  renderMissInspections(data);
-  renderRacks();
-  renderCarriers();
-}
-
-/* -----------------------------
-   Render Functions
------------------------------- */
-function renderScanners(data) {
-  const ctx = document.getElementById("scannersChart").getContext("2d");
+/* ===========================
+   Scanners Panel
+=========================== */
+async function renderScanners() {
+  const data = await fetchReturns();
   const scanners = {};
-  data.forEach(item => {
-    const name = item.created_by || "Unknown";
-    scanners[name] = (scanners[name] || 0) + 1;
+  data.forEach(r => {
+    if (!scanners[r.scanner]) scanners[r.scanner] = 0;
+    scanners[r.scanner]++;
   });
 
-  new Chart(ctx, {
+  const ctx = document.getElementById("scannersChart").getContext("2d");
+  if (window.scannersChart) window.scannersChart.destroy();
+  window.scannersChart = new Chart(ctx, {
     type: "doughnut",
     data: {
       labels: Object.keys(scanners),
       datasets: [{
         data: Object.values(scanners),
-        backgroundColor: ["#007BFF", "#28A745", "#FFC107", "#DC3545"]
+        backgroundColor: ["#007BFF", "#00d4ff", "#28a745", "#ffc107", "#dc3545"],
       }]
     },
-    options: {
-      responsive: true,
-      plugins: { legend: { position: "bottom" } }
-    }
+    options: { responsive: true }
   });
+
+  document.getElementById("scannersLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
 }
 
-function renderClassifications(data) {
+/* ===========================
+   Classifications Panel
+=========================== */
+async function renderClassifications() {
+  const data = await fetchReturns();
+  const counts = { Good: 0, Used: 0, Damage: 0, Missing: 0, Core: 0, "Not Our Part": 0 };
+
+  data.forEach(r => {
+    if (counts[r.classification] !== undefined) counts[r.classification]++;
+  });
+
   const ctx = document.getElementById("classificationsChart").getContext("2d");
-  const classes = {};
-  data.forEach(item => {
-    const status = item.returnstatus_id || "Unknown";
-    classes[status] = (classes[status] || 0) + 1;
-  });
-
-  new Chart(ctx, {
-    type: "bar",
+  if (window.classificationsChart) window.classificationsChart.destroy();
+  window.classificationsChart = new Chart(ctx, {
+    type: "doughnut",
     data: {
-      labels: Object.keys(classes),
+      labels: Object.keys(counts),
       datasets: [{
-        label: "Count",
-        data: Object.values(classes),
-        backgroundColor: "#007BFF"
+        data: Object.values(counts),
+        backgroundColor: ["#28a745", "#17a2b8", "#ffc107", "#dc3545", "#6c757d", "#007BFF"],
       }]
     },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } }
-    }
+    options: { responsive: true }
   });
+
+  document.getElementById("classificationsLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
 }
 
-function renderMissInspections(data) {
-  const table = document.getElementById("missInspectionsTable");
-  table.innerHTML = "";
-
-  appState.inspections
-    .filter(i => i.date === getSelectedDate())
-    .forEach((insp, idx) => {
-      const row = document.createElement("tr");
-      row.innerHTML = `
-        <td>${insp.tracking}</td>
-        <td>${insp.returnId || "-"}</td>
-        <td>${insp.reason}</td>
-        <td><button onclick="viewPhotos('${insp.tracking}', '${insp.returnId}')">View</button></td>
-      `;
-      table.appendChild(row);
-    });
+/* ===========================
+   Racks Panel
+=========================== */
+function saveRacksLog(e) {
+  e.preventDefault();
+  const date = getSelectedDate();
+  const entry = {
+    racks: parseInt(document.getElementById("racksInput").value) || 0,
+    coreRacks: parseInt(document.getElementById("coreRacksInput").value) || 0,
+    electric: parseInt(document.getElementById("electricInput").value) || 0,
+    coreElectric: parseInt(document.getElementById("coreElectricInput").value) || 0,
+    axlesGood: parseInt(document.getElementById("axlesGoodInput").value) || 0,
+    axlesUsed: parseInt(document.getElementById("axlesUsedInput").value) || 0,
+    driveshaftGood: parseInt(document.getElementById("driveshaftGoodInput").value) || 0,
+    driveshaftUsed: parseInt(document.getElementById("driveshaftUsedInput").value) || 0,
+    gearboxGood: parseInt(document.getElementById("gearboxGoodInput").value) || 0,
+    gearboxUsed: parseInt(document.getElementById("gearboxUsedInput").value) || 0,
+  };
+  state.racks[date] = entry;
+  localStorage.setItem("racksData", JSON.stringify(state.racks));
+  renderRacks();
 }
 
 function renderRacks() {
-  // Example donut
+  const date = getSelectedDate();
+  const data = state.racks[date] || {};
   const ctx = document.getElementById("racksChart").getContext("2d");
-  const todays = appState.racks.filter(r => r.date === getSelectedDate());
-
-  const racks = todays.reduce((acc, r) => {
-    acc.total += r.count;
-    return acc;
-  }, { total: 0 });
-
-  new Chart(ctx, {
+  if (window.racksChart) window.racksChart.destroy();
+  window.racksChart = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: ["Racks"],
+      labels: ["Racks", "Core Racks", "Electric", "Core Electric", "Axles Good", "Axles Used", "Driveshaft Good", "Driveshaft Used", "Gearbox Good", "Gearbox Used"],
       datasets: [{
-        data: [racks.total],
-        backgroundColor: ["#28A745"]
+        data: [
+          data.racks || 0,
+          data.coreRacks || 0,
+          data.electric || 0,
+          data.coreElectric || 0,
+          data.axlesGood || 0,
+          data.axlesUsed || 0,
+          data.driveshaftGood || 0,
+          data.driveshaftUsed || 0,
+          data.gearboxGood || 0,
+          data.gearboxUsed || 0,
+        ],
+        backgroundColor: ["#007BFF","#0056b3","#17a2b8","#0dcaf0","#28a745","#20c997","#ffc107","#fd7e14","#6f42c1","#dc3545"],
       }]
     },
     options: { responsive: true }
   });
+
+  document.getElementById("racksLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
 }
 
-function renderCarriers() {
-  const ctx = document.getElementById("carriersChart").getContext("2d");
-  const todays = appState.carriers.filter(c => c.date === getSelectedDate());
+/* ===========================
+   Miss Inspections
+=========================== */
+async function saveMissInspection(e) {
+  e.preventDefault();
+  const tracking = document.getElementById("trackingInput").value.trim();
+  const reason = document.getElementById("reasonInput").value.trim();
+  if (!tracking || !reason) return alert("Tracking number and reason required.");
 
-  const carriers = todays.reduce((acc, c) => {
-    acc[c.name] = (acc[c.name] || 0) + c.count;
-    return acc;
-  }, {});
+  const returns = await fetchReturns();
+  const match = returns.find(r => r.tracking_number === tracking);
+  const entry = {
+    tracking,
+    returnId: match ? match.id : null,
+    scanner: match ? match.scanner : "Unknown",
+    reason,
+    date: getSelectedDate()
+  };
 
-  new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: Object.keys(carriers),
-      datasets: [{
-        label: "Shipments",
-        data: Object.values(carriers),
-        backgroundColor: "#17A2B8"
-      }]
-    },
-    options: { responsive: true }
+  state.inspections.push(entry);
+  localStorage.setItem("missInspections", JSON.stringify(state.inspections));
+  renderMissInspections();
+}
+
+async function renderMissInspections() {
+  const date = getSelectedDate();
+  const tbody = document.getElementById("missInspectionsTableBody");
+  tbody.innerHTML = "";
+
+  state.inspections.filter(i => i.date === date).forEach((ins, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${ins.tracking}</td>
+      <td>${ins.returnId || "-"}</td>
+      <td>${ins.scanner}</td>
+      <td>${ins.reason}</td>
+      <td><button onclick="viewPhotos('${ins.tracking}','${ins.returnId}')">View</button></td>
+    `;
+    tbody.appendChild(tr);
   });
 }
 
-/* -----------------------------
-   Miss Inspections Photo Viewer
------------------------------- */
 async function viewPhotos(tracking, returnId) {
   try {
     const res = await fetch(`/.netlify/functions/photos?id=${tracking}`);
-    const urls = await res.json();
-
-    const modal = document.getElementById("photoModal");
-    const gallery = document.getElementById("photoGallery");
-    gallery.innerHTML = "";
-
-    if (urls.length === 0 && returnId) {
-      // fallback by return ID
+    const data = await res.json();
+    const photos = data.photos || [];
+    const modalBody = document.getElementById("photosModalBody");
+    modalBody.innerHTML = "";
+    if (photos.length === 0 && returnId) {
       const res2 = await fetch(`/.netlify/functions/photos?id=${returnId}`);
-      const urls2 = await res2.json();
-      urls2.forEach(u => {
+      const data2 = await res2.json();
+      data2.photos.forEach(url => {
         const img = document.createElement("img");
-        img.src = u;
-        gallery.appendChild(img);
+        img.src = url;
+        modalBody.appendChild(img);
       });
     } else {
-      urls.forEach(u => {
+      photos.forEach(url => {
         const img = document.createElement("img");
-        img.src = u;
-        gallery.appendChild(img);
+        img.src = url;
+        modalBody.appendChild(img);
       });
     }
-
-    modal.style.display = "block";
+    document.getElementById("photosModal").style.display = "flex";
   } catch (err) {
-    console.error("Photo fetch failed", err);
+    console.error("Error loading photos:", err);
   }
 }
 
-/* -----------------------------
-   Form Handlers (Racks, Carriers, Inspections)
------------------------------- */
-document.getElementById("racksForm")?.addEventListener("submit", e => {
-  e.preventDefault();
-  const count = parseInt(document.getElementById("racksCount").value, 10);
-  appState.racks.push({ date: getSelectedDate(), count });
-  localStorage.setItem("racks", JSON.stringify(appState.racks));
+/* ===========================
+   Reports (Print)
+=========================== */
+function printReport() {
+  const date = getSelectedDate();
+  const pretty = formatDateForHeader(date);
+  const header = document.getElementById("reportHeader");
+  header.innerText = `Daily Report — ${pretty}`;
+  window.print();
+}
+
+/* ===========================
+   Initialization
+=========================== */
+function refreshAllPanels() {
+  renderScanners();
+  renderClassifications();
   renderRacks();
-});
-
-document.getElementById("carriersForm")?.addEventListener("submit", e => {
-  e.preventDefault();
-  const name = document.getElementById("carrierName").value;
-  const count = parseInt(document.getElementById("carrierCount").value, 10);
-  appState.carriers.push({ date: getSelectedDate(), name, count });
-  localStorage.setItem("carriers", JSON.stringify(appState.carriers));
-  renderCarriers();
-});
-
-document.getElementById("inspectionForm")?.addEventListener("submit", e => {
-  e.preventDefault();
-  const tracking = document.getElementById("inspTracking").value;
-  const reason = document.getElementById("inspReason").value;
-  const returnId = document.getElementById("inspReturnId").value || null;
-
-  appState.inspections.push({
-    date: getSelectedDate(),
-    tracking,
-    returnId,
-    reason
-  });
-  localStorage.setItem("inspections", JSON.stringify(appState.inspections));
   renderMissInspections();
-});
+}
 
-/* -----------------------------
-   Init
------------------------------- */
 document.addEventListener("DOMContentLoaded", () => {
-  // Default date picker to today
-  const picker = document.getElementById("globalDate");
-  if (picker) picker.value = getSelectedDate();
+  // Default date = today
+  document.getElementById("globalDate").value = getSelectedDate();
 
+  // Navigation
+  document.querySelectorAll(".navbar button").forEach(b => {
+    b.addEventListener("click", () => showPanel(b.dataset.target));
+  });
+
+  // Forms
+  document.getElementById("racksForm").addEventListener("submit", saveRacksLog);
+  document.getElementById("missInspectionForm").addEventListener("submit", saveMissInspection);
+
+  // Date change refresh
+  document.getElementById("globalDate").addEventListener("change", refreshAllPanels);
+
+  // Init
   refreshAllPanels();
 
-  // Re-render when date changes
-  if (picker) {
-    picker.addEventListener("change", () => {
-      refreshAllPanels();
-    });
-  }
-
-  // Auto-refresh live data every 15s
-  setInterval(refreshAllPanels, 15000);
+  // Auto-refresh live data
+  setInterval(() => {
+    renderScanners();
+    renderClassifications();
+  }, 15000);
 });
