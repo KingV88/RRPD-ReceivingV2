@@ -1,42 +1,24 @@
-exports.handler = async function(event) {
+// Netlify Function: returns.js
+// Proxies Detroit Axle returns API, adds optional date filter
+export async function handler(event) {
+  const date = event.queryStringParameters.date;
+
   try {
-    const apiUrl = "https://returns.detroitaxle.com/api/returns";
+    const res = await fetch("https://returns.detroitaxle.com/api/returns");
+    const data = await res.json();
 
-    // Check for ?date=YYYY-MM-DD in the request
-    const { date } = event.queryStringParameters || {};
-
-    const response = await fetch(apiUrl, { method: "GET" });
-
-    if (!response.ok) {
-      return {
-        statusCode: response.status,
-        body: JSON.stringify({ error: `Upstream error: ${response.statusText}` })
-      };
-    }
-
-    const allData = await response.json();
-
-    let filtered = allData;
-
-    // If a date was passed, filter by created_at field
+    // If ?date passed, filter client-side by created_at
+    let filtered = data;
     if (date) {
-      filtered = allData.filter(item => {
-        if (!item.created_at) return false;
-        // created_at is like "2025-09-26 14:02:51"
-        const itemDate = item.created_at.split(" ")[0];
-        return itemDate === date;
-      });
+      filtered = data.filter(r => r.created_at && r.created_at.startsWith(date));
     }
 
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(filtered)
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify(filtered),
     };
-  } catch (error) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: error.message })
-    };
+  } catch (err) {
+    return { statusCode: 500, body: JSON.stringify({ error: "Failed to fetch returns", details: err.message }) };
   }
-};
+}
