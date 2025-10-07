@@ -1,32 +1,31 @@
-// Netlify Function: photos.js
-// Fetches photos by tracking number OR return ID, tries multiple filename patterns
-export async function handler(event) {
-  const id = event.queryStringParameters.id;
-  if (!id) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Missing id" }) };
+export async function handler(event, context) {
+  try {
+    const id = event.queryStringParameters.id;
+    if (!id) {
+      return { statusCode: 400, body: JSON.stringify({ error: "Missing id" }) };
+    }
+
+    const base = "https://returns.detroitaxle.com/uploads/";
+    const candidates = [
+      `${id}.jpg`,
+      ...Array.from({ length: 10 }).map((_, i) => `${id}-${i+1}.jpg`),
+      ...Array.from({ length: 10 }).map((_, i) => `${id}_${i+1}.jpg`),
+    ];
+
+    const urls = [];
+    for (const file of candidates) {
+      try {
+        const r = await fetch(base + file, { method: "HEAD" });
+        if (r.ok) urls.push(base + file);
+      } catch {}
+    }
+
+    return {
+      statusCode: 200,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify(urls),
+    };
+  } catch (err) {
+    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
-
-  const base = "https://returns.detroitaxle.com/uploads/";
-  const possible = [];
-
-  // Patterns to check: plain, dash, underscore, up to 10
-  possible.push(`${id}.jpg`);
-  for (let i=1;i<=10;i++){
-    possible.push(`${id}-${i}.jpg`);
-    possible.push(`${id}_${i}.jpg`);
-  }
-
-  const found = [];
-  for (const file of possible) {
-    try {
-      const check = await fetch(base + file, { method: "HEAD" });
-      if (check.ok) found.push(base + file);
-    } catch {}
-  }
-
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-    body: JSON.stringify(found),
-  };
 }
