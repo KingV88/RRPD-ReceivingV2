@@ -1,272 +1,248 @@
-/* ===========================
-   Global State & Helpers
-=========================== */
+// ===== Global State =====
 let state = {
-  racks: JSON.parse(localStorage.getItem("racksData")) || {},
-  carriers: JSON.parse(localStorage.getItem("carriersData")) || {},
-  inspections: JSON.parse(localStorage.getItem("missInspections")) || [],
+  returns: [],
+  racks: JSON.parse(localStorage.getItem("racks") || "{}"),
+  carriers: JSON.parse(localStorage.getItem("carriers") || "{}"),
+  inspections: JSON.parse(localStorage.getItem("inspections") || "[]"),
 };
 
+// ===== Helpers =====
 function getSelectedDate() {
   const input = document.getElementById("globalDate");
-  if (!input) return new Date().toISOString().split("T")[0];
-  return input.value || new Date().toISOString().split("T")[0];
+  return input?.value || new Date().toISOString().split("T")[0];
 }
-
 function formatDateForHeader(dateStr) {
   const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  return d.toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric"
+  });
+}
+function updateTimestamp(elId) {
+  const el = document.getElementById(elId);
+  if (el) {
+    const now = new Date();
+    el.textContent = "Last updated: " + now.toLocaleTimeString();
+  }
 }
 
-/* ===========================
-   Navigation
-=========================== */
-function showPanel(id) {
-  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-  document.getElementById(id).classList.add("active");
+// ===== Navigation =====
+document.querySelectorAll(".nav-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("visible"));
+    document.getElementById(btn.dataset.target).classList.add("visible");
+  });
+});
 
-  document.querySelectorAll(".navbar button").forEach(b => b.classList.remove("active"));
-  document.querySelector(`.navbar button[data-target='${id}']`).classList.add("active");
-}
-
-/* ===========================
-   Data Fetch (via Netlify)
-=========================== */
+// ===== Fetch Returns =====
 async function fetchReturns() {
   const date = getSelectedDate();
   try {
     const res = await fetch(`/.netlify/functions/returns?date=${date}`);
-    if (!res.ok) throw new Error("Failed to fetch returns");
-    return await res.json();
+    const json = await res.json();
+    // fallback: filter by created_at if server ignored ?date
+    const filtered = json.filter(r => r.created_at?.startsWith(date));
+    state.returns = filtered;
   } catch (err) {
-    console.error("Error fetching returns:", err);
-    return [];
+    console.error("Returns fetch failed", err);
+    state.returns = [];
   }
 }
 
-/* ===========================
-   Scanners Panel
-=========================== */
-async function renderScanners() {
-  const data = await fetchReturns();
-  const scanners = {};
-  data.forEach(r => {
-    if (!scanners[r.scanner]) scanners[r.scanner] = 0;
-    scanners[r.scanner]++;
+// ===== Render Functions =====
+function renderScanners() {
+  const dailyEl = document.getElementById("scannersDailyChart");
+  const allTimeEl = document.getElementById("scannersAllTimeChart");
+  if (!dailyEl || !allTimeEl) return;
+
+  const data = state.returns;
+  if (!data.length) {
+    document.getElementById("scannersEmpty").textContent = "No scans found.";
+    return;
+  } else {
+    document.getElementById("scannersEmpty").textContent = "";
+  }
+
+  // counts by scanner
+  const counts = {};
+  data.forEach(r => counts[r.scanner] = (counts[r.scanner] || 0) + 1);
+
+  new Chart(dailyEl, {
+    type: "bar",
+    data: { labels: Object.keys(counts), datasets: [{
+      label: "Scans", data: Object.values(counts),
+      backgroundColor: "#3a7ce0"
+    }]},
+    options: { responsive: true, plugins:{legend:{display:false}} }
   });
 
-  const ctx = document.getElementById("scannersChart").getContext("2d");
-  if (window.scannersChart) window.scannersChart.destroy();
-  window.scannersChart = new Chart(ctx, {
-    type: "doughnut",
-    data: {
-      labels: Object.keys(scanners),
-      datasets: [{
-        data: Object.values(scanners),
-        backgroundColor: ["#007BFF", "#00d4ff", "#28a745", "#ffc107", "#dc3545"],
-      }]
-    },
-    options: { responsive: true }
-  });
-
-  document.getElementById("scannersLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
+  updateTimestamp("scannersUpdated");
 }
 
-/* ===========================
-   Classifications Panel
-=========================== */
-async function renderClassifications() {
-  const data = await fetchReturns();
-  const counts = { Good: 0, Used: 0, Damage: 0, Missing: 0, Core: 0, "Not Our Part": 0 };
+function renderClassifications() {
+  const donutEl = document.getElementById("classificationsDonut");
+  if (!donutEl) return;
+  const data = state.returns;
+  if (!data.length) {
+    document.getElementById("classificationsEmpty").textContent = "No classifications.";
+    return;
+  } else {
+    document.getElementById("classificationsEmpty").textContent = "";
+  }
+  const counts = {};
+  data.forEach(r => counts[r.classification] = (counts[r.classification]||0)+1);
 
-  data.forEach(r => {
-    if (counts[r.classification] !== undefined) counts[r.classification]++;
-  });
-
-  const ctx = document.getElementById("classificationsChart").getContext("2d");
-  if (window.classificationsChart) window.classificationsChart.destroy();
-  window.classificationsChart = new Chart(ctx, {
+  new Chart(donutEl, {
     type: "doughnut",
-    data: {
-      labels: Object.keys(counts),
-      datasets: [{
-        data: Object.values(counts),
-        backgroundColor: ["#28a745", "#17a2b8", "#ffc107", "#dc3545", "#6c757d", "#007BFF"],
-      }]
-    },
-    options: { responsive: true }
+    data: { labels: Object.keys(counts), datasets: [{
+      data: Object.values(counts),
+      backgroundColor: ["#3a7ce0","#2ecc71","#f1c40f","#e67e22","#e74c3c","#9b59b6"]
+    }]},
+    options: { responsive:true, plugins:{legend:{position:"bottom"}} }
   });
-
-  document.getElementById("classificationsLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
+  updateTimestamp("classificationsUpdated");
 }
 
-/* ===========================
-   Racks Panel
-=========================== */
-function saveRacksLog(e) {
+// ===== Racks =====
+document.getElementById("racksForm").addEventListener("submit", e=>{
   e.preventDefault();
   const date = getSelectedDate();
-  const entry = {
-    racks: parseInt(document.getElementById("racksInput").value) || 0,
-    coreRacks: parseInt(document.getElementById("coreRacksInput").value) || 0,
-    electric: parseInt(document.getElementById("electricInput").value) || 0,
-    coreElectric: parseInt(document.getElementById("coreElectricInput").value) || 0,
-    axlesGood: parseInt(document.getElementById("axlesGoodInput").value) || 0,
-    axlesUsed: parseInt(document.getElementById("axlesUsedInput").value) || 0,
-    driveshaftGood: parseInt(document.getElementById("driveshaftGoodInput").value) || 0,
-    driveshaftUsed: parseInt(document.getElementById("driveshaftUsedInput").value) || 0,
-    gearboxGood: parseInt(document.getElementById("gearboxGoodInput").value) || 0,
-    gearboxUsed: parseInt(document.getElementById("gearboxUsedInput").value) || 0,
+  state.racks[date] = {
+    racks: +document.getElementById("racks").value||0,
+    coreRacks: +document.getElementById("coreRacks").value||0,
+    electricRacks: +document.getElementById("electricRacks").value||0,
+    coreElectricRacks: +document.getElementById("coreElectricRacks").value||0,
+    axlesGood: +document.getElementById("axlesGood").value||0,
+    axlesUsed: +document.getElementById("axlesUsed").value||0,
+    driveshaftsGood: +document.getElementById("driveshaftsGood").value||0,
+    driveshaftsUsed: +document.getElementById("driveshaftsUsed").value||0,
+    gearboxesGood: +document.getElementById("gearboxesGood").value||0,
+    gearboxesUsed: +document.getElementById("gearboxesUsed").value||0,
   };
-  state.racks[date] = entry;
-  localStorage.setItem("racksData", JSON.stringify(state.racks));
+  localStorage.setItem("racks", JSON.stringify(state.racks));
   renderRacks();
-}
-
+});
+document.getElementById("resetRacksBtn").addEventListener("click", ()=>{
+  if (confirm("Reset racks logs for all dates?")) {
+    state.racks = {};
+    localStorage.setItem("racks", "{}");
+    renderRacks();
+    document.getElementById("lastResetDate").textContent =
+      "Last reset: " + new Date().toLocaleDateString();
+  }
+});
 function renderRacks() {
   const date = getSelectedDate();
-  const data = state.racks[date] || {};
-  const ctx = document.getElementById("racksChart").getContext("2d");
-  if (window.racksChart) window.racksChart.destroy();
-  window.racksChart = new Chart(ctx, {
-    type: "doughnut",
-    data: {
-      labels: ["Racks", "Core Racks", "Electric", "Core Electric", "Axles Good", "Axles Used", "Driveshaft Good", "Driveshaft Used", "Gearbox Good", "Gearbox Used"],
-      datasets: [{
-        data: [
-          data.racks || 0,
-          data.coreRacks || 0,
-          data.electric || 0,
-          data.coreElectric || 0,
-          data.axlesGood || 0,
-          data.axlesUsed || 0,
-          data.driveshaftGood || 0,
-          data.driveshaftUsed || 0,
-          data.gearboxGood || 0,
-          data.gearboxUsed || 0,
-        ],
-        backgroundColor: ["#007BFF","#0056b3","#17a2b8","#0dcaf0","#28a745","#20c997","#ffc107","#fd7e14","#6f42c1","#dc3545"],
-      }]
-    },
-    options: { responsive: true }
+  const data = state.racks[date];
+  if (!data) {
+    document.getElementById("racksEmpty").textContent="No racks logged.";
+    return;
+  } else { document.getElementById("racksEmpty").textContent=""; }
+  // Example: just render 1 donut for Racks vs Core
+  new Chart(document.getElementById("racksDonut"), {
+    type:"doughnut",
+    data:{labels:["Racks","Core"],datasets:[{data:[data.racks,data.coreRacks],backgroundColor:["#3a7ce0","#e74c3c"]}]}
   });
-
-  document.getElementById("racksLastUpdated").innerText = "Last updated: " + new Date().toLocaleTimeString();
+  updateTimestamp("racksUpdated");
 }
 
-/* ===========================
-   Miss Inspections
-=========================== */
-async function saveMissInspection(e) {
+// ===== Carriers =====
+document.getElementById("carriersForm").addEventListener("submit", e=>{
   e.preventDefault();
-  const tracking = document.getElementById("trackingInput").value.trim();
-  const reason = document.getElementById("reasonInput").value.trim();
-  if (!tracking || !reason) return alert("Tracking number and reason required.");
-
-  const returns = await fetchReturns();
-  const match = returns.find(r => r.tracking_number === tracking);
-  const entry = {
-    tracking,
-    returnId: match ? match.id : null,
-    scanner: match ? match.scanner : "Unknown",
-    reason,
-    date: getSelectedDate()
+  const date = getSelectedDate();
+  state.carriers[date] = {
+    fedex:+document.getElementById("fedex").value||0,
+    ups:+document.getElementById("ups").value||0,
+    usps:+document.getElementById("usps").value||0,
+    other:+document.getElementById("otherCarrier").value||0,
   };
-
-  state.inspections.push(entry);
-  localStorage.setItem("missInspections", JSON.stringify(state.inspections));
-  renderMissInspections();
+  localStorage.setItem("carriers", JSON.stringify(state.carriers));
+  renderCarriers();
+});
+function renderCarriers() {
+  const date = getSelectedDate();
+  const data = state.carriers[date];
+  if (!data) {
+    document.getElementById("carriersEmpty").textContent="No carriers logged.";
+    return;
+  } else { document.getElementById("carriersEmpty").textContent=""; }
+  new Chart(document.getElementById("carriersTodayDonut"), {
+    type:"doughnut",
+    data:{labels:["FedEx","UPS","USPS","Other"],datasets:[{data:Object.values(data),backgroundColor:["#3a7ce0","#f1c40f","#2ecc71","#e74c3c"]}]}
+  });
+  updateTimestamp("carriersUpdated");
 }
 
-async function renderMissInspections() {
+// ===== Miss Inspections =====
+document.getElementById("missInspectionForm").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const tracking = document.getElementById("trackingNumber").value.trim();
+  const reason = document.getElementById("reason").value.trim();
   const date = getSelectedDate();
-  const tbody = document.getElementById("missInspectionsTableBody");
-  tbody.innerHTML = "";
 
-  state.inspections.filter(i => i.date === date).forEach((ins, idx) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${ins.tracking}</td>
-      <td>${ins.returnId || "-"}</td>
-      <td>${ins.scanner}</td>
-      <td>${ins.reason}</td>
-      <td><button onclick="viewPhotos('${ins.tracking}','${ins.returnId}')">View</button></td>
-    `;
+  let returnId=null, scanner="N/A";
+  const rec = state.returns.find(r=>r.tracking_number===tracking);
+  if (rec) { returnId=rec.id; scanner=rec.scanner; }
+
+  const entry={tracking,returnId,scanner,reason,date,time:new Date().toLocaleTimeString()};
+  state.inspections.push(entry);
+  localStorage.setItem("inspections",JSON.stringify(state.inspections));
+  renderMissInspections();
+});
+function renderMissInspections() {
+  const tbody=document.querySelector("#missInspectionsTable tbody");
+  tbody.innerHTML="";
+  const date=getSelectedDate();
+  const list=state.inspections.filter(i=>i.date===date);
+  if(!list.length){tbody.innerHTML=`<tr><td colspan="6">No inspections logged.</td></tr>`;return;}
+  list.forEach(i=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${i.tracking}</td><td>${i.returnId||"-"}</td><td>${i.scanner}</td><td>${i.reason}</td><td>${i.time}</td>
+    <td><button onclick="viewPhotos('${i.tracking}','${i.returnId||""}')">View</button></td>`;
     tbody.appendChild(tr);
   });
 }
-
-async function viewPhotos(tracking, returnId) {
-  try {
-    const res = await fetch(`/.netlify/functions/photos?id=${tracking}`);
-    const data = await res.json();
-    const photos = data.photos || [];
-    const modalBody = document.getElementById("photosModalBody");
-    modalBody.innerHTML = "";
-    if (photos.length === 0 && returnId) {
-      const res2 = await fetch(`/.netlify/functions/photos?id=${returnId}`);
-      const data2 = await res2.json();
-      data2.photos.forEach(url => {
-        const img = document.createElement("img");
-        img.src = url;
-        modalBody.appendChild(img);
+async function viewPhotos(tracking,returnId){
+  const modal=document.getElementById("photoModal");
+  const grid=document.getElementById("photoContainer");
+  grid.innerHTML="Loading...";
+  modal.style.display="flex";
+  try{
+    const res=await fetch(`/.netlify/functions/photos?id=${tracking}`);
+    const json=await res.json();
+    grid.innerHTML="";
+    if(!json.length && returnId){
+      const res2=await fetch(`/.netlify/functions/photos?id=${returnId}`);
+      const json2=await res2.json();
+      json2.forEach(url=>{
+        const img=document.createElement("img");img.src=url;grid.appendChild(img);
       });
     } else {
-      photos.forEach(url => {
-        const img = document.createElement("img");
-        img.src = url;
-        modalBody.appendChild(img);
+      json.forEach(url=>{
+        const img=document.createElement("img");img.src=url;grid.appendChild(img);
       });
     }
-    document.getElementById("photosModal").style.display = "flex";
-  } catch (err) {
-    console.error("Error loading photos:", err);
-  }
+  }catch(err){grid.innerHTML="No photos found.";}
 }
+document.getElementById("closeModal").onclick=()=>{document.getElementById("photoModal").style.display="none";};
 
-/* ===========================
-   Reports (Print)
-=========================== */
-function printReport() {
-  const date = getSelectedDate();
-  const pretty = formatDateForHeader(date);
-  const header = document.getElementById("reportHeader");
-  header.innerText = `Daily Report — ${pretty}`;
+// ===== Reports =====
+function printReport(){
+  const date=getSelectedDate();
+  document.getElementById("reportHeader").textContent=`Daily Report — ${formatDateForHeader(date)}`;
   window.print();
 }
 
-/* ===========================
-   Initialization
-=========================== */
-function refreshAllPanels() {
+// ===== Init =====
+async function refreshAll(){
+  await fetchReturns();
   renderScanners();
   renderClassifications();
   renderRacks();
+  renderCarriers();
   renderMissInspections();
 }
-
-document.addEventListener("DOMContentLoaded", () => {
-  // Default date = today
-  document.getElementById("globalDate").value = getSelectedDate();
-
-  // Navigation
-  document.querySelectorAll(".navbar button").forEach(b => {
-    b.addEventListener("click", () => showPanel(b.dataset.target));
-  });
-
-  // Forms
-  document.getElementById("racksForm").addEventListener("submit", saveRacksLog);
-  document.getElementById("missInspectionForm").addEventListener("submit", saveMissInspection);
-
-  // Date change refresh
-  document.getElementById("globalDate").addEventListener("change", refreshAllPanels);
-
-  // Init
-  refreshAllPanels();
-
-  // Auto-refresh live data
-  setInterval(() => {
-    renderScanners();
-    renderClassifications();
-  }, 15000);
-});
+document.getElementById("globalDate").addEventListener("change",refreshAll);
+refreshAll();
+setInterval(refreshAll,15000);
