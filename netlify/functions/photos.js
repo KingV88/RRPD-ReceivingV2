@@ -1,31 +1,50 @@
 export async function handler(event, context) {
-  try {
-    const id = event.queryStringParameters.id;
-    if (!id) {
-      return { statusCode: 400, body: JSON.stringify({ error: "Missing id" }) };
-    }
-
-    const base = "https://returns.detroitaxle.com/uploads/";
-    const candidates = [
-      `${id}.jpg`,
-      ...Array.from({ length: 10 }).map((_, i) => `${id}-${i+1}.jpg`),
-      ...Array.from({ length: 10 }).map((_, i) => `${id}_${i+1}.jpg`),
-    ];
-
-    const urls = [];
-    for (const file of candidates) {
-      try {
-        const r = await fetch(base + file, { method: "HEAD" });
-        if (r.ok) urls.push(base + file);
-      } catch {}
-    }
-
+  const id = event.queryStringParameters.id;
+  if (!id) {
     return {
-      statusCode: 200,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify(urls),
+      statusCode: 400,
+      body: JSON.stringify({ error: "Missing id parameter" })
     };
-  } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
+
+  // Detroit Axle uploads path
+  const BASE = "https://returns.detroitaxle.com/uploads";
+
+  // possible filename patterns
+  const candidates = [];
+  // plain
+  candidates.push(`${id}.jpg`);
+  candidates.push(`${id}.jpeg`);
+  candidates.push(`${id}.png`);
+  // dashed suffix
+  for (let i = 1; i <= 10; i++) {
+    candidates.push(`${id}-${i}.jpg`);
+    candidates.push(`${id}-${i}.jpeg`);
+  }
+  // underscored suffix
+  for (let i = 1; i <= 10; i++) {
+    candidates.push(`${id}_${i}.jpg`);
+    candidates.push(`${id}_${i}.jpeg`);
+  }
+
+  const found = [];
+  for (const file of candidates) {
+    try {
+      const res = await fetch(`${BASE}/${file}`, { method: "HEAD" });
+      if (res.ok) {
+        found.push(`${BASE}/${file}`);
+      }
+    } catch (err) {
+      // ignore errors for non-existing
+    }
+  }
+
+  return {
+    statusCode: 200,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ photos: found })
+  };
 }
