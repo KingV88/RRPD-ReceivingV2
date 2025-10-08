@@ -1,21 +1,44 @@
 export async function handler(event, context) {
-  try {
-    const date = event.queryStringParameters.date || "";
-    const url = "https://returns.detroitaxle.com/api/returns";
-    const res = await fetch(url);
-    const data = await res.json();
+  const API_URL = "https://returns.detroitaxle.com/api/returns"; // adjust if needed
+  const date = event.queryStringParameters.date;
 
-    // If date is passed, filter results by that date (YYYY-MM-DD)
-    const filtered = date
-      ? data.filter(item => item.created_at && item.created_at.startsWith(date))
-      : data;
+  try {
+    let url = API_URL;
+    if (date) {
+      // pass date filter if API accepts it
+      url += `?date=${date}`;
+    }
+
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) {
+      return {
+        statusCode: res.status,
+        body: JSON.stringify({ error: "Failed to fetch returns" })
+      };
+    }
+
+    let data = await res.json();
+
+    // safety net: if backend ignores ?date, filter here
+    if (date && Array.isArray(data)) {
+      data = data.filter(item =>
+        item.created_at && item.created_at.startsWith(date)
+      );
+    }
 
     return {
       statusCode: 200,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify(filtered),
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(data)
     };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+    console.error("returns.js error:", err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Server error fetching returns" })
+    };
   }
 }
