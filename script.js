@@ -1,248 +1,221 @@
-// ===== Global State =====
+// ============================
+// GLOBAL STATE & CONSTANTS
+// ============================
+const RETURNS_API = "/.netlify/functions/returns";
+const PHOTOS_API = "/.netlify/functions/photos";
+
+let scannersDailyChart;
+let classificationsChart;
+let racksChart;
+let carriersChart;
+
 let state = {
-  returns: [],
-  racks: JSON.parse(localStorage.getItem("racks") || "{}"),
-  carriers: JSON.parse(localStorage.getItem("carriers") || "{}"),
-  inspections: JSON.parse(localStorage.getItem("inspections") || "[]"),
+  racks: JSON.parse(localStorage.getItem("racks")) || [],
+  carriers: JSON.parse(localStorage.getItem("carriers")) || [],
+  inspections: JSON.parse(localStorage.getItem("inspections")) || []
 };
 
-// ===== Helpers =====
+// ============================
+// DATE HELPERS
+// ============================
 function getSelectedDate() {
-  const input = document.getElementById("globalDate");
-  return input?.value || new Date().toISOString().split("T")[0];
-}
-function formatDateForHeader(dateStr) {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric"
-  });
-}
-function updateTimestamp(elId) {
-  const el = document.getElementById(elId);
-  if (el) {
-    const now = new Date();
-    el.textContent = "Last updated: " + now.toLocaleTimeString();
+  const dateInput = document.getElementById("globalDate");
+  if (!dateInput || !dateInput.value) {
+    return new Date().toISOString().split("T")[0];
   }
+  return dateInput.value;
 }
 
-// ===== Navigation =====
-document.querySelectorAll(".nav-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("visible"));
-    document.getElementById(btn.dataset.target).classList.add("visible");
-  });
-});
-
-// ===== Fetch Returns =====
-async function fetchReturns() {
+// ============================
+// FETCH HELPERS
+// ============================
+async function fetchReturnsData() {
   const date = getSelectedDate();
   try {
-    const res = await fetch(`/.netlify/functions/returns?date=${date}`);
-    const json = await res.json();
-    // fallback: filter by created_at if server ignored ?date
-    const filtered = json.filter(r => r.created_at?.startsWith(date));
-    state.returns = filtered;
+    const response = await fetch(`${RETURNS_API}?date=${date}`);
+    if (!response.ok) throw new Error("Failed to fetch returns");
+    return await response.json();
   } catch (err) {
-    console.error("Returns fetch failed", err);
-    state.returns = [];
+    console.error("Error fetching returns:", err);
+    return [];
   }
 }
 
-// ===== Render Functions =====
-function renderScanners() {
-  const dailyEl = document.getElementById("scannersDailyChart");
-  const allTimeEl = document.getElementById("scannersAllTimeChart");
-  if (!dailyEl || !allTimeEl) return;
-
-  const data = state.returns;
-  if (!data.length) {
-    document.getElementById("scannersEmpty").textContent = "No scans found.";
-    return;
-  } else {
-    document.getElementById("scannersEmpty").textContent = "";
+async function fetchPhotos(id) {
+  try {
+    const response = await fetch(`${PHOTOS_API}?id=${id}`);
+    if (!response.ok) throw new Error("Failed to fetch photos");
+    const data = await response.json();
+    return data.photos || [];
+  } catch (err) {
+    console.error("Error fetching photos:", err);
+    return [];
   }
+}
 
-  // counts by scanner
-  const counts = {};
-  data.forEach(r => counts[r.scanner] = (counts[r.scanner] || 0) + 1);
+// ============================
+// NAVIGATION
+// ============================
+function showPanel(panelId) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.add("hidden"));
+  document.getElementById(panelId).classList.remove("hidden");
+}
 
-  new Chart(dailyEl, {
+// ============================
+// RENDER FUNCTIONS (CHARTS)
+// ============================
+function renderScannersChart(data) {
+  const ctx = document.getElementById("scannersDailyChart").getContext("2d");
+  if (scannersDailyChart) scannersDailyChart.destroy();
+  scannersDailyChart = new Chart(ctx, {
     type: "bar",
-    data: { labels: Object.keys(counts), datasets: [{
-      label: "Scans", data: Object.values(counts),
-      backgroundColor: "#3a7ce0"
-    }]},
-    options: { responsive: true, plugins:{legend:{display:false}} }
+    data,
+    options: { responsive: true, maintainAspectRatio: false }
   });
-
-  updateTimestamp("scannersUpdated");
 }
 
-function renderClassifications() {
-  const donutEl = document.getElementById("classificationsDonut");
-  if (!donutEl) return;
-  const data = state.returns;
-  if (!data.length) {
-    document.getElementById("classificationsEmpty").textContent = "No classifications.";
-    return;
-  } else {
-    document.getElementById("classificationsEmpty").textContent = "";
-  }
-  const counts = {};
-  data.forEach(r => counts[r.classification] = (counts[r.classification]||0)+1);
-
-  new Chart(donutEl, {
+function renderClassificationsChart(data) {
+  const ctx = document.getElementById("classificationsChart").getContext("2d");
+  if (classificationsChart) classificationsChart.destroy();
+  classificationsChart = new Chart(ctx, {
     type: "doughnut",
-    data: { labels: Object.keys(counts), datasets: [{
-      data: Object.values(counts),
-      backgroundColor: ["#3a7ce0","#2ecc71","#f1c40f","#e67e22","#e74c3c","#9b59b6"]
-    }]},
-    options: { responsive:true, plugins:{legend:{position:"bottom"}} }
+    data,
+    options: { responsive: true, maintainAspectRatio: false }
   });
-  updateTimestamp("classificationsUpdated");
 }
 
-// ===== Racks =====
-document.getElementById("racksForm").addEventListener("submit", e=>{
-  e.preventDefault();
-  const date = getSelectedDate();
-  state.racks[date] = {
-    racks: +document.getElementById("racks").value||0,
-    coreRacks: +document.getElementById("coreRacks").value||0,
-    electricRacks: +document.getElementById("electricRacks").value||0,
-    coreElectricRacks: +document.getElementById("coreElectricRacks").value||0,
-    axlesGood: +document.getElementById("axlesGood").value||0,
-    axlesUsed: +document.getElementById("axlesUsed").value||0,
-    driveshaftsGood: +document.getElementById("driveshaftsGood").value||0,
-    driveshaftsUsed: +document.getElementById("driveshaftsUsed").value||0,
-    gearboxesGood: +document.getElementById("gearboxesGood").value||0,
-    gearboxesUsed: +document.getElementById("gearboxesUsed").value||0,
-  };
+function renderRacksChart(data) {
+  const ctx = document.getElementById("racksChart").getContext("2d");
+  if (racksChart) racksChart.destroy();
+  racksChart = new Chart(ctx, {
+    type: "bar",
+    data,
+    options: { responsive: true, maintainAspectRatio: false }
+  });
+}
+
+function renderCarriersChart(data) {
+  const ctx = document.getElementById("carriersChart").getContext("2d");
+  if (carriersChart) carriersChart.destroy();
+  carriersChart = new Chart(ctx, {
+    type: "pie",
+    data,
+    options: { responsive: true, maintainAspectRatio: false }
+  });
+}
+
+// ============================
+// PANEL UPDATES
+// ============================
+async function updateScannersPanel() {
+  const returns = await fetchReturnsData();
+  const data = processScannersData(returns);
+  renderScannersChart(data);
+}
+
+async function updateClassificationsPanel() {
+  const returns = await fetchReturnsData();
+  const data = processClassificationsData(returns);
+  renderClassificationsChart(data);
+}
+
+function updateRacksPanel() {
+  const data = processRacksData(state.racks);
+  renderRacksChart(data);
   localStorage.setItem("racks", JSON.stringify(state.racks));
-  renderRacks();
-});
-document.getElementById("resetRacksBtn").addEventListener("click", ()=>{
-  if (confirm("Reset racks logs for all dates?")) {
-    state.racks = {};
-    localStorage.setItem("racks", "{}");
-    renderRacks();
-    document.getElementById("lastResetDate").textContent =
-      "Last reset: " + new Date().toLocaleDateString();
-  }
-});
-function renderRacks() {
-  const date = getSelectedDate();
-  const data = state.racks[date];
-  if (!data) {
-    document.getElementById("racksEmpty").textContent="No racks logged.";
-    return;
-  } else { document.getElementById("racksEmpty").textContent=""; }
-  // Example: just render 1 donut for Racks vs Core
-  new Chart(document.getElementById("racksDonut"), {
-    type:"doughnut",
-    data:{labels:["Racks","Core"],datasets:[{data:[data.racks,data.coreRacks],backgroundColor:["#3a7ce0","#e74c3c"]}]}
-  });
-  updateTimestamp("racksUpdated");
 }
 
-// ===== Carriers =====
-document.getElementById("carriersForm").addEventListener("submit", e=>{
-  e.preventDefault();
-  const date = getSelectedDate();
-  state.carriers[date] = {
-    fedex:+document.getElementById("fedex").value||0,
-    ups:+document.getElementById("ups").value||0,
-    usps:+document.getElementById("usps").value||0,
-    other:+document.getElementById("otherCarrier").value||0,
-  };
+function updateCarriersPanel() {
+  const data = processCarriersData(state.carriers);
+  renderCarriersChart(data);
   localStorage.setItem("carriers", JSON.stringify(state.carriers));
-  renderCarriers();
-});
-function renderCarriers() {
-  const date = getSelectedDate();
-  const data = state.carriers[date];
-  if (!data) {
-    document.getElementById("carriersEmpty").textContent="No carriers logged.";
-    return;
-  } else { document.getElementById("carriersEmpty").textContent=""; }
-  new Chart(document.getElementById("carriersTodayDonut"), {
-    type:"doughnut",
-    data:{labels:["FedEx","UPS","USPS","Other"],datasets:[{data:Object.values(data),backgroundColor:["#3a7ce0","#f1c40f","#2ecc71","#e74c3c"]}]}
-  });
-  updateTimestamp("carriersUpdated");
 }
 
-// ===== Miss Inspections =====
-document.getElementById("missInspectionForm").addEventListener("submit", async e=>{
-  e.preventDefault();
-  const tracking = document.getElementById("trackingNumber").value.trim();
-  const reason = document.getElementById("reason").value.trim();
-  const date = getSelectedDate();
-
-  let returnId=null, scanner="N/A";
-  const rec = state.returns.find(r=>r.tracking_number===tracking);
-  if (rec) { returnId=rec.id; scanner=rec.scanner; }
-
-  const entry={tracking,returnId,scanner,reason,date,time:new Date().toLocaleTimeString()};
-  state.inspections.push(entry);
-  localStorage.setItem("inspections",JSON.stringify(state.inspections));
-  renderMissInspections();
-});
-function renderMissInspections() {
-  const tbody=document.querySelector("#missInspectionsTable tbody");
-  tbody.innerHTML="";
-  const date=getSelectedDate();
-  const list=state.inspections.filter(i=>i.date===date);
-  if(!list.length){tbody.innerHTML=`<tr><td colspan="6">No inspections logged.</td></tr>`;return;}
-  list.forEach(i=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${i.tracking}</td><td>${i.returnId||"-"}</td><td>${i.scanner}</td><td>${i.reason}</td><td>${i.time}</td>
-    <td><button onclick="viewPhotos('${i.tracking}','${i.returnId||""}')">View</button></td>`;
+function updateMissInspectionsPanel() {
+  const tbody = document.querySelector("#inspectionsTable tbody");
+  tbody.innerHTML = "";
+  state.inspections.forEach((ins, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${ins.tracking}</td>
+      <td>${ins.returnId || "-"}</td>
+      <td>${ins.reason}</td>
+      <td><button onclick="viewPhotos('${ins.tracking}', '${ins.returnId}')">View</button></td>
+    `;
     tbody.appendChild(tr);
   });
-}
-async function viewPhotos(tracking,returnId){
-  const modal=document.getElementById("photoModal");
-  const grid=document.getElementById("photoContainer");
-  grid.innerHTML="Loading...";
-  modal.style.display="flex";
-  try{
-    const res=await fetch(`/.netlify/functions/photos?id=${tracking}`);
-    const json=await res.json();
-    grid.innerHTML="";
-    if(!json.length && returnId){
-      const res2=await fetch(`/.netlify/functions/photos?id=${returnId}`);
-      const json2=await res2.json();
-      json2.forEach(url=>{
-        const img=document.createElement("img");img.src=url;grid.appendChild(img);
-      });
-    } else {
-      json.forEach(url=>{
-        const img=document.createElement("img");img.src=url;grid.appendChild(img);
-      });
-    }
-  }catch(err){grid.innerHTML="No photos found.";}
-}
-document.getElementById("closeModal").onclick=()=>{document.getElementById("photoModal").style.display="none";};
-
-// ===== Reports =====
-function printReport(){
-  const date=getSelectedDate();
-  document.getElementById("reportHeader").textContent=`Daily Report — ${formatDateForHeader(date)}`;
-  window.print();
+  localStorage.setItem("inspections", JSON.stringify(state.inspections));
 }
 
-// ===== Init =====
-async function refreshAll(){
-  await fetchReturns();
-  renderScanners();
-  renderClassifications();
-  renderRacks();
-  renderCarriers();
-  renderMissInspections();
+// ============================
+// PHOTO VIEWER
+// ============================
+async function viewPhotos(tracking, returnId) {
+  let photos = await fetchPhotos(tracking);
+  if (photos.length === 0 && returnId) {
+    photos = await fetchPhotos(returnId);
+  }
+  const container = document.getElementById("photoContainer");
+  container.innerHTML = photos.length
+    ? photos.map(url => `<img src="${url}" alt="photo">`).join("")
+    : "<p>No photos found</p>";
+  document.getElementById("photoModal").classList.remove("hidden");
 }
-document.getElementById("globalDate").addEventListener("change",refreshAll);
-refreshAll();
-setInterval(refreshAll,15000);
+
+// ============================
+// FORM HANDLERS
+// ============================
+document.getElementById("racksForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const rack = e.target.rack.value.trim();
+  if (rack) {
+    state.racks.push({ rack, date: getSelectedDate() });
+    updateRacksPanel();
+    e.target.reset();
+  }
+});
+
+document.getElementById("carriersForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const carrier = e.target.carrier.value.trim();
+  if (carrier) {
+    state.carriers.push({ carrier, date: getSelectedDate() });
+    updateCarriersPanel();
+    e.target.reset();
+  }
+});
+
+document.getElementById("missInspectionForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const tracking = e.target.tracking.value.trim();
+  const reason = e.target.reason.value.trim();
+  if (tracking && reason) {
+    state.inspections.push({
+      tracking,
+      reason,
+      returnId: null,
+      date: getSelectedDate()
+    });
+    updateMissInspectionsPanel();
+    e.target.reset();
+  }
+});
+
+// ============================
+// INITIALIZE + AUTO REFRESH
+// ============================
+async function refreshAllPanels() {
+  await updateScannersPanel();
+  await updateClassificationsPanel();
+  updateRacksPanel();
+  updateCarriersPanel();
+  updateMissInspectionsPanel();
+  document.getElementById("lastUpdated").textContent =
+    "Last updated: " + new Date().toLocaleTimeString();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  refreshAllPanels();
+  setInterval(refreshAllPanels, 15000);
+  document.getElementById("globalDate").addEventListener("change", refreshAllPanels);
+});
