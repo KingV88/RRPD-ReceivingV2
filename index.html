@@ -1,240 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RRPD Receiving Dashboard</title>
   <link rel="stylesheet" href="style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <!-- Top Bar -->
   <header class="topbar">
-    <div class="brand">
-      <img src="detroit-axle-logo.png" alt="Detroit Axle" class="logo"/>
-      <div>
-        <div class="title">RRPD Receiving</div>
-        <div class="subtitle">Detroit Axle — Receiving & Returns</div>
-      </div>
-    </div>
-    <div class="top-actions">
-      <div class="row">
-        <label class="lbl">Date</label>
-        <input type="date" id="globalDate"/>
-      </div>
-      <div class="row">
-        <button id="refresh_data" class="btn">⟳ Refresh Now</button>
-        <button id="toggle_manual" class="btn alt">✎ Manual Mode</button>
-      </div>
-      <div class="row clock" id="clock">--:--:--</div>
-    </div>
+    <h1>RRPD Receiving Dashboard</h1>
+    <nav class="tabs" role="tablist" aria-label="Main">
+      <button class="tab active" data-panel="scanners" role="tab" aria-selected="true">Scanners</button>
+      <button class="tab" data-panel="classifications" role="tab" aria-selected="false">Classifications</button>
+      <button class="tab" data-panel="miss" role="tab" aria-selected="false">Miss Inspections</button>
+      <button id="refreshBtn" class="refresh">Refresh</button>
+    </nav>
   </header>
 
-  <!-- Nav -->
-  <nav class="navbar">
-    <button class="nav-btn active" data-panel="dashboard">Dashboard</button>
-    <button class="nav-btn" data-panel="scanners">Scanners</button>
-    <button class="nav-btn" data-panel="carriers">Carriers</button>
-    <button class="nav-btn" data-panel="racks">Racks</button>
-    <button class="nav-btn" data-panel="classifications">Classifications</button>
-    <button class="nav-btn" data-panel="miss">Miss Inspections</button>
-    <button class="nav-btn" data-panel="training">Training</button>
-    <button class="nav-btn" data-panel="settings">Settings</button>
-  </nav>
-
-  <!-- Panels -->
-  <main class="main">
-
-    <!-- Dashboard -->
-    <section id="dashboard" class="panel active">
-      <div class="panel-head">
-        <h2>Dashboard</h2>
-        <div id="lastUpdated" class="small">—</div>
-      </div>
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Scanners — Today</h3>
-          <div class="canvas-wrap"><canvas id="dash_scanners_today"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Classifications — Today</h3>
-          <div class="canvas-wrap"><canvas id="dash_class_today"></canvas></div>
-        </div>
-      </div>
-      <div id="apiBanner" class="banner hidden">⚠️ API offline — using manual/local data.</div>
-    </section>
-
+  <main>
     <!-- Scanners -->
-    <section id="scanners" class="panel">
-      <div class="panel-head">
+    <section id="panel-scanners" class="panel active" role="tabpanel" aria-labelledby="Scanners">
+      <div class="panel-header">
         <h2>Scanners</h2>
-        <div class="small" id="scannerUpdated">—</div>
-      </div>
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Daily (Donut)</h3>
-          <div class="canvas-wrap"><canvas id="scanner_donut"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>All-time (Bar)</h3>
-          <div class="canvas-wrap"><canvas id="scanner_alltime"></canvas></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Carriers -->
-    <section id="carriers" class="panel">
-      <div class="panel-head"><h2>Carriers</h2></div>
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Today (Donut)</h3>
-          <div class="canvas-wrap"><canvas id="carrier_donut"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Add Entry (Manual)</h3>
-          <form id="carrierForm" class="form-row">
-            <select id="carrierName">
-              <option value="FedEx">FedEx</option>
-              <option value="UPS">UPS</option>
-              <option value="USPS">USPS</option>
-              <option value="Other">Other</option>
-            </select>
-            <input id="carrierCount" type="number" placeholder="Count"/>
-            <button class="btn" type="submit">Add</button>
-          </form>
-          <div id="carrierList" class="small mt8"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Racks -->
-    <section id="racks" class="panel">
-      <div class="panel-head"><h2>Racks / Axles / Driveshafts / Gearboxes</h2></div>
-      <div class="grid grid-3">
-        <div class="card">
-          <h3>Racks</h3>
-          <div class="canvas-wrap"><canvas id="donut_racks"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>E-Racks</h3>
-          <div class="canvas-wrap"><canvas id="donut_eracks"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Axles</h3>
-          <div class="canvas-wrap"><canvas id="donut_axles"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Drive Shafts</h3>
-          <div class="canvas-wrap"><canvas id="donut_ds"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Gearboxes</h3>
-          <div class="canvas-wrap"><canvas id="donut_gb"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>All Parts Overview</h3>
-          <div class="canvas-wrap"><canvas id="racks_all"></canvas></div>
+        <div class="filters">
+          <label>Week ending:
+            <input id="weekEnd" type="date" />
+          </label>
         </div>
       </div>
 
-      <div class="card">
-        <h3>Quick Input (Manual)</h3>
-        <form id="racksForm" class="form-row">
-          <select id="ri_type">
-            <option value="racks">Racks (Good vs Core)</option>
-            <option value="eracks">E-Racks (Good vs Core)</option>
-            <option value="axles">Axles (Good vs Used)</option>
-            <option value="ds">Drive Shafts (Good vs Used)</option>
-            <option value="gb">Gearboxes (Good vs Used)</option>
-          </select>
-          <input type="number" id="ri_good" placeholder="Good"/>
-          <input type="number" id="ri_coreused" placeholder="Core/Used"/>
-          <button class="btn" type="submit">Save</button>
-          <button class="btn alt" id="reset_racks" type="button">Reset Log</button>
+      <div class="grid two">
+        <div class="card">
+          <h3>Today</h3>
+          <canvas id="scannersTodayDonut" height="180"></canvas>
+        </div>
+        <div class="card">
+          <h3>Daily (This Week)</h3>
+          <canvas id="scannersDailyBar" height="180"></canvas>
+        </div>
+      </div>
+
+      <details class="card">
+        <summary>Manual fallback (only used if API is down)</summary>
+        <form id="scannerManualForm" class="inline-form">
+          <label>Scanner name <input name="name" placeholder="e.g., Jeff" required /></label>
+          <label>Count <input name="count" type="number" min="0" step="1" required /></label>
+          <button type="submit">Add</button>
         </form>
-        <div id="racksLog" class="small mt8"></div>
-      </div>
+        <p class="hint">Manual entries are stored locally and merged into charts for today only.</p>
+      </details>
     </section>
 
     <!-- Classifications -->
-    <section id="classifications" class="panel">
-      <div class="panel-head">
+    <section id="panel-classifications" class="panel" role="tabpanel" aria-labelledby="Classifications">
+      <div class="panel-header">
         <h2>Classifications</h2>
-        <div class="small" id="classUpdated">—</div>
+        <div class="filters">
+          <label>Week ending:
+            <input id="weekEndC" type="date" />
+          </label>
+        </div>
       </div>
-      <div class="grid">
+
+      <div class="grid two">
         <div class="card">
-          <h3>Today (Donut)</h3>
-          <div class="canvas-wrap"><canvas id="class_donut"></canvas></div>
+          <h3>Today</h3>
+          <canvas id="classTodayDonut" height="180"></canvas>
+        </div>
+        <div class="card">
+          <h3>Daily (This Week)</h3>
+          <canvas id="classDailyBar" height="180"></canvas>
         </div>
       </div>
     </section>
 
     <!-- Miss Inspections -->
-    <section id="miss" class="panel">
-      <div class="panel-head"><h2>Miss Inspections</h2></div>
+    <section id="panel-miss" class="panel" role="tabpanel" aria-labelledby="Miss Inspections">
+      <div class="panel-header">
+        <h2>Miss Inspections</h2>
+      </div>
+
       <div class="card">
-        <form id="missInspectionForm" class="form-row">
-          <input type="text" id="missTracking" placeholder="Tracking #" required/>
-          <input type="text" id="missReason" placeholder="Reason" required/>
-          <button class="btn" type="submit">Add</button>
+        <form id="missSearchForm" class="inline-form">
+          <label>Tracking # <input id="missTrack" placeholder="Enter tracking number" required /></label>
+          <button type="submit">Find</button>
         </form>
-        <div class="table-wrap">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Tracking #</th><th>Return ID</th><th>Scanner</th><th>Reason</th><th>Date</th><th>Photos</th>
-              </tr>
-            </thead>
-            <tbody id="missTableBody"></tbody>
-          </table>
-        </div>
+        <div id="missResult" class="photos"></div>
+      </div>
+
+      <div class="card">
+        <h3>Log a reason</h3>
+        <form id="missReasonForm" class="inline-form">
+          <label>Tracking # <input id="missReasonTrack" required /></label>
+          <label>Reason
+            <input id="missReasonText" placeholder="e.g., Blurry / Missing label / Damaged" required />
+          </label>
+          <button type="submit">Save</button>
+        </form>
+        <div id="missLog"></div>
       </div>
     </section>
-
-    <!-- Training -->
-    <section id="training" class="panel">
-      <div class="panel-head"><h2>Training & Quiz</h2></div>
-      <div class="card">
-        <p class="small">Bilingual manual coming next. For now, a quiz placeholder is available.</p>
-        <button id="start_quiz" class="btn">Start Quiz</button>
-      </div>
-    </section>
-
-    <!-- Settings -->
-    <section id="settings" class="panel">
-      <div class="panel-head"><h2>Settings (Admin)</h2></div>
-      <div class="card">
-        <div class="form-row">
-          <input id="admin_user" placeholder="User"/>
-          <input id="admin_pass" placeholder="Pass" type="password"/>
-          <button id="admin_login" class="btn">Login</button>
-          <button id="admin_logout" class="btn alt">Logout</button>
-        </div>
-        <div id="admin_badge" class="admin-badge hidden">🔑 Admin mode</div>
-      </div>
-      <div class="card">
-        <h3>Export</h3>
-        <button id="export_csv" class="btn">Export Logs CSV</button>
-        <button id="backup_json" class="btn">Backup JSON</button>
-      </div>
-    </section>
-
   </main>
 
-  <!-- Loader + Toast -->
-  <div id="loader" class="loader hidden"><div class="spinner"></div><div>Fetching data…</div></div>
-  <div id="toast" class="toast"></div>
+  <footer>
+    <small>Status: <span id="statusText">Loading…</span></small>
+  </footer>
 
-  <!-- Photo Modal -->
-  <div id="photoModal" class="modal hidden">
-    <div class="modal-content">
-      <span id="closeModal" class="close">&times;</span>
-      <div id="photoGallery" class="gallery"></div>
-    </div>
-  </div>
-
-  <!-- JS last -->
   <script src="script.js"></script>
 </body>
 </html>
