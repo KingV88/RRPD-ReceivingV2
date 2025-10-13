@@ -1,44 +1,37 @@
-export async function handler(event, context) {
-  const API_URL = "https://returns.detroitaxle.com/api/returns"; // adjust if needed
-  const date = event.queryStringParameters.date;
+// netlify/functions/returns.js
+const fetch = require("node-fetch");
 
+exports.handler = async () => {
   try {
-    let url = API_URL;
-    if (date) {
-      // pass date filter if API accepts it
-      url += `?date=${date}`;
-    }
+    // Replace this with your actual data source API endpoint:
+    const apiUrl = "https://returns.detroitaxle.com/api/returns";
 
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetch(apiUrl);
     if (!res.ok) {
       return {
         statusCode: res.status,
-        body: JSON.stringify({ error: "Failed to fetch returns" })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error: `API request failed: ${res.statusText}` }),
       };
     }
 
-    let data = await res.json();
-
-    // safety net: if backend ignores ?date, filter here
-    if (date && Array.isArray(data)) {
-      data = data.filter(item =>
-        item.created_at && item.created_at.startsWith(date)
-      );
-    }
+    const data = await res.json();
 
     return {
       statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(data)
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Returns data successfully fetched",
+        count: data.length || 0,
+        results: data,
+      }),
     };
   } catch (err) {
-    console.error("returns.js error:", err);
+    console.error("❌ Returns fetch error:", err);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Server error fetching returns" })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Internal Server Error", details: err.message }),
     };
   }
-}
+};
