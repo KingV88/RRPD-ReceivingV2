@@ -1,50 +1,38 @@
-// netlify/functions/photos.js
-const fetch = require("node-fetch");
+// CommonJS + native fetch
+// GET /.netlify/functions/photos?id=<return_id_or_tracking>
 
 exports.handler = async (event) => {
-  try {
-    const { id } = event.queryStringParameters;
-
-    if (!id) {
-      return {
-        statusCode: 400,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Missing id parameter" }),
-      };
-    }
-
-    const baseUrl = "https://returns.detroitaxle.com/uploads/";
-    const candidates = [];
-
-    // Try common file naming patterns
-    candidates.push(`${id}.jpg`);
-    for (let i = 1; i <= 10; i++) {
-      candidates.push(`${id}-${i}.jpg`);
-      candidates.push(`${id}_${i}.jpg`);
-    }
-
-    const foundPhotos = [];
-
-    for (const file of candidates) {
-      const res = await fetch(baseUrl + file, { method: "HEAD" });
-      if (res.ok) foundPhotos.push(baseUrl + file);
-    }
-
+  const id = event.queryStringParameters && event.queryStringParameters.id;
+  if (!id) {
     return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id,
-        photoCount: foundPhotos.length,
-        photos: foundPhotos,
-      }),
-    };
-  } catch (err) {
-    console.error("❌ Photos function error:", err);
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Internal Server Error", details: err.message }),
+      statusCode: 400,
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ error: 'Missing id parameter' })
     };
   }
+
+  const baseUrl = 'https://returns.detroitaxle.com/uploads/';
+  const candidates = [];
+
+  // Single name
+  candidates.push(`${id}.jpg`);
+
+  // id-1..10
+  for (let i = 1; i <= 10; i++) candidates.push(`${id}-${i}.jpg`);
+  // id_1..10
+  for (let i = 1; i <= 10; i++) candidates.push(`${id}_${i}.jpg`);
+
+  const found = [];
+  for (const file of candidates) {
+    try {
+      const head = await fetch(baseUrl + file, { method: 'HEAD' });
+      if (head.ok) found.push(baseUrl + file);
+    } catch (_) {}
+  }
+
+  return {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+    body: JSON.stringify({ id, photos: found })
+  };
 };
