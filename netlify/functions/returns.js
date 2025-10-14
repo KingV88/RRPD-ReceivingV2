@@ -1,37 +1,40 @@
-// netlify/functions/returns.js
-const fetch = require("node-fetch");
+// CommonJS + native fetch (Node 18 on Netlify)
+// GET /.netlify/functions/returns
+// GET /.netlify/functions/returns?date=YYYY-MM-DD
 
-exports.handler = async () => {
+exports.handler = async (event) => {
+  const url = new URL(event.rawUrl || `https://dummy${event.path}${event.queryStringParameters ? '?' + new URLSearchParams(event.queryStringParameters).toString() : ''}`);
+  const date = url.searchParams.get('date');
+
+  const UPSTREAM = 'https://returns.detroitaxle.com/api/returns';
+
   try {
-    // Replace this with your actual data source API endpoint:
-    const apiUrl = "https://returns.detroitaxle.com/api/returns";
-
-    const res = await fetch(apiUrl);
+    const res = await fetch(UPSTREAM, { headers: { accept: 'application/json' } });
     if (!res.ok) {
       return {
-        statusCode: res.status,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: `API request failed: ${res.statusText}` }),
+        statusCode: 502,
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ error: `Upstream returned ${res.status}` })
       };
     }
 
-    const data = await res.json();
+    let data = await res.json();
+    if (!Array.isArray(data)) data = data?.data ?? [];
+
+    if (date) {
+      data = data.filter(r => (r.created_at || r.createdAt || '').startsWith(date));
+    }
 
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: "Returns data successfully fetched",
-        count: data.length || 0,
-        results: data,
-      }),
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      body: JSON.stringify(data)
     };
-  } catch (err) {
-    console.error("❌ Returns fetch error:", err);
+  } catch (e) {
     return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Internal Server Error", details: err.message }),
+      statusCode: 502,
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ error: 'Proxy failure', detail: String(e) })
     };
   }
 };
