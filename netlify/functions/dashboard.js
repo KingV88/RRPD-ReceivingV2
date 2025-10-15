@@ -1,78 +1,73 @@
-// netlify/functions/dashboard.js
+const fetch = require("node-fetch");
 
-function parseRows(html) {
-  const rows = [...html.matchAll(/<tr[^>]*>(.*?)<\/tr>/gi)].map(r => {
-    const cols = [...r[1].matchAll(/<td[^>]*>(.*?)<\/td>/gi)].map(c =>
-      c[1].replace(/<[^>]*>/g, "").trim()
-    );
-    return cols;
-  });
-  return rows;
-}
-
-function parseData(html) {
-  const rows = parseRows(html);
-  const items = [];
-  const buckets = {};
-
-  for (const r of rows) {
-    if (r.length < 2) continue;
-    const part = r[0];
-    const classification = r[1].toLowerCase();
-
-    const item = { part, classification };
-    items.push(item);
-
-    if (!buckets[classification]) buckets[classification] = 0;
-    buckets[classification]++;
-  }
-
-  const missed = items.filter(it => {
-    const c = it.classification;
-    return !["good", "used", "core"].some(k => c.includes(k));
-  });
-
-  return { items, buckets, missed };
-}
-
-exports.handler = async () => {
+exports.handler = async function (event, context) {
   try {
-    console.log("Fetching dashboard data...");
+    // --- 1️⃣ Fetch Data from Your Active API Endpoints ---
+    const returnsUrl = "https://returns.detroitaxle.com/returns/reports/condition";
+    const photosUrl = "https://returns.detroitaxle.com/uploads"; // adjust if needed
 
-    const res = await fetch("https://returns.detroitaxle.com/returns/reports/condition", {
-      method: "GET",
-      headers: {
-        "User-Agent": "RRPD-Dashboard",
-        "Accept": "text/html"
+    console.log("Fetching RRPD data...");
+
+    const [returnsRes, photosRes] = await Promise.all([
+      fetch(returnsUrl),
+      fetch(photosUrl)
+    ]);
+
+    if (!returnsRes.ok || !photosRes.ok) {
+      throw new Error(`Failed API: ${returnsRes.status} / ${photosRes.status}`);
+    }
+
+    const returnsHtml = await returnsRes.text();
+
+    // --- 2️⃣ Parse Returns Data (Classification Table) ---
+    const rows = [...returnsHtml.matchAll(/<tr>(.*?)<\/tr>/gis)]
+      .map(r => r[1].replace(/<\/?[^>]+(>|$)/g, "").split(/\s+/).filter(Boolean))
+      .filter(cols => cols.length >= 4);
+
+    let classifications = {};
+    let scanners = {};
+    let trends = {};
+
+    for (const cols of rows) {
+      const date = cols[0] || "Unknown";
+      const scanner = cols[2] || "Unassigned";
+      const classification = cols[cols.length - 1] || "Unknown";
+
+      // Count by classification
+      classifications[classification] = (classifications[classification] || 0) + 1;
+
+      // Count by scanner
+      scanners[scanner] = (scanners[scanner] || 0) + 1;
+
+      // Count weekly trend by date
+      trends[date] = (trends[date] || 0) + 1;
+    }
+
+    // --- 3️⃣ Format Final Dashboard Data ---
+    const dashboard = {
+      scanners,
+      classifications,
+      trends,
+      summary: {
+        totalReturns: rows.length,
+        timestamp: new Date().toISOString()
       }
-    });
+    };
 
-    if (!res.ok) throw new Error(`Dashboard API responded with ${res.status}`);
-
-    const html = await res.text();
-    const parsed = parseData(html);
-
-    console.log("Dashboard parsed successfully.");
-
+    // --- 4️⃣ Return Data to Frontend ---
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        message: "Dashboard loaded",
-        items: parsed.items,
-        buckets: parsed.buckets,
-        missed: parsed.missed,
-        timestamp: new Date().toISOString()
-      }),
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dashboard, null, 2)
     };
+
   } catch (err) {
-    console.error("Error fetching dashboard:", err);
+    console.error("Dashboard Error:", err);
+
     return {
       statusCode: 500,
-      body: JSON.stringify({
-        error: "Failed to load dashboard data",
-        details: err.message
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Dashboard function failed", message: err.message })
     };
   }
 };
