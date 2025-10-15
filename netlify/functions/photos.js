@@ -1,38 +1,36 @@
-// CommonJS + native fetch
-// GET /.netlify/functions/photos?id=<return_id_or_tracking>
+// netlify/functions/photos.js
 
-exports.handler = async (event) => {
-  const id = event.queryStringParameters && event.queryStringParameters.id;
-  if (!id) {
+exports.handler = async () => {
+  try {
+    console.log("Fetching photo data...");
+
+    const res = await fetch("https://returns.detroitaxle.com/api/photos", {
+      method: "GET"
+    });
+
+    if (!res.ok) throw new Error(`Photo API responded with ${res.status}`);
+
+    const data = await res.json();
+
+    console.log("Photos loaded successfully.");
+
     return {
-      statusCode: 400,
-      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-      body: JSON.stringify({ error: 'Missing id parameter' })
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "Photos retrieved successfully",
+        total: data.length || 0,
+        photos: data
+      }),
+      headers: { "Content-Type": "application/json" }
+    };
+  } catch (err) {
+    console.error("Error fetching photos:", err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: "Failed to load photo data",
+        details: err.message
+      })
     };
   }
-
-  const baseUrl = 'https://returns.detroitaxle.com/uploads/';
-  const candidates = [];
-
-  // Single name
-  candidates.push(`${id}.jpg`);
-
-  // id-1..10
-  for (let i = 1; i <= 10; i++) candidates.push(`${id}-${i}.jpg`);
-  // id_1..10
-  for (let i = 1; i <= 10; i++) candidates.push(`${id}_${i}.jpg`);
-
-  const found = [];
-  for (const file of candidates) {
-    try {
-      const head = await fetch(baseUrl + file, { method: 'HEAD' });
-      if (head.ok) found.push(baseUrl + file);
-    } catch (_) {}
-  }
-
-  return {
-    statusCode: 200,
-    headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-    body: JSON.stringify({ id, photos: found })
-  };
 };
