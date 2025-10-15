@@ -1,40 +1,77 @@
-// CommonJS + native fetch (Node 18 on Netlify)
-// GET /.netlify/functions/returns
-// GET /.netlify/functions/returns?date=YYYY-MM-DD
+// netlify/functions/returns.js
 
+// Helper: Extract rows from Detroit Axle returns table
+function parseRows(html) {
+  const rows = [...html.matchAll(/<tr[^>]*>(.*?)<\/tr>/gi)].map(r => {
+    const cols = [...r[1].matchAll(/<td[^>]*>(.*?)<\/td>/gi)].map(c =>
+      c[1].replace(/<[^>]*>/g, "").trim()
+    );
+    return cols;
+  });
+  return rows;
+}
+
+// Helper: Convert rows to objects
+function parseReturns(html) {
+  const rows = parseRows(html);
+  const records = [];
+
+  for (const r of rows) {
+    if (r.length < 5) continue;
+
+    const record = {
+      orderNumber: r[0],
+      status: r[1],
+      createdAt: r[2],
+      updatedAt: r[3],
+      partNumber: r[4],
+      classification: r[5] || "Unknown"
+    };
+    records.push(record);
+  }
+
+  return records;
+}
+
+// Main function
 exports.handler = async (event) => {
-  const url = new URL(event.rawUrl || `https://dummy${event.path}${event.queryStringParameters ? '?' + new URLSearchParams(event.queryStringParameters).toString() : ''}`);
-  const date = url.searchParams.get('date');
-
-  const UPSTREAM = 'https://returns.detroitaxle.com/api/returns';
-
   try {
-    const res = await fetch(UPSTREAM, { headers: { accept: 'application/json' } });
+    const date = event.queryStringParameters?.date || "";
+    const url = date
+      ? `https://returns.detroitaxle.com/api/returns?date=${date}`
+      : "https://returns.detroitaxle.com/api/returns";
+
+    console.log("Fetching returns data from:", url);
+
+    const res = await fetch(url, { method: "GET" });
+
     if (!res.ok) {
-      return {
-        statusCode: 502,
-        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-        body: JSON.stringify({ error: `Upstream returned ${res.status}` })
-      };
+      throw new Error(`Returns API responded with ${res.status}`);
     }
 
-    let data = await res.json();
-    if (!Array.isArray(data)) data = data?.data ?? [];
+    const html = await res.text();
+    const data = parseReturns(html);
 
-    if (date) {
-      data = data.filter(r => (r.created_at || r.createdAt || '').startsWith(date));
-    }
+    console.log("Returns data parsed successfully.");
 
     return {
       statusCode: 200,
-      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        message: "Returns loaded successfully",
+        count: data.length,
+        data
+      }),
+      headers: { "Content-Type": "application/json" }
     };
-  } catch (e) {
+
+  } catch (err) {
+    console.error("Error fetching returns:", err);
     return {
-      statusCode: 502,
-      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-      body: JSON.stringify({ error: 'Proxy failure', detail: String(e) })
+      statusCode: 500,
+      body: JSON.stringify({
+        error: "Failed to load returns data",
+        details: err.message
+      })
     };
   }
 };
