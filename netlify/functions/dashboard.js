@@ -1,73 +1,124 @@
-const fetch = require("node-fetch");
+// ===== RRPD Dashboard Netlify Function =====
 
-exports.handler = async function (event, context) {
+// Import node-fetch (v3+ ESM-compatible)
+import fetch from "node-fetch";
+
+// Helper: Timeout-safe fetch
+async function safeFetch(url, options = {}, timeout = 15000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
-    // --- 1️⃣ Fetch Data from Your Active API Endpoints ---
-    const returnsUrl = "https://returns.detroitaxle.com/returns/reports/condition";
-    const photosUrl = "https://returns.detroitaxle.com/uploads"; // adjust if needed
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return res;
+  } catch (err) {
+    clearTimeout(id);
+    console.error("Fetch error:", err.message);
+    return null;
+  }
+}
 
-    console.log("Fetching RRPD data...");
+// Helper: Parse Detroit Axle table HTML
+function parseRows(html) {
+  const regex = /<tr[^>]*>(.*?)<\/tr>/gis;
+  const cellRegex = /<td[^>]*>(.*?)<\/td>/gis;
+  const rows = [];
+  let rowMatch;
+  while ((rowMatch = regex.exec(html))) {
+    const cells = [];
+    let cellMatch;
+    while ((cellMatch = cellRegex.exec(rowMatch[1]))) {
+      const text = cellMatch[1].replace(/<[^>]*>/g, "").trim();
+      cells.push(text);
+    }
+    if (cells.length) rows.push(cells);
+  }
+  return rows;
+}
 
-    const [returnsRes, photosRes] = await Promise.all([
-      fetch(returnsUrl),
-      fetch(photosUrl)
-    ]);
+// Helper: Count classifications
+function summarizeClassifications(rows) {
+  const summary = {
+    Good: 0,
+    Used: 0,
+    Core: 0,
+    Damaged: 0,
+    Missing: 0,
+    "Not Our Part": 0,
+  };
 
-    if (!returnsRes.ok || !photosRes.ok) {
-      throw new Error(`Failed API: ${returnsRes.status} / ${photosRes.status}`);
+  for (const r of rows) {
+    const description = (r[5] || "").toLowerCase();
+    if (description.includes("good")) summary.Good++;
+    else if (description.includes("used")) summary.Used++;
+    else if (description.includes("core")) summary.Core++;
+    else if (description.includes("damaged")) summary.Damaged++;
+    else if (description.includes("missing")) summary.Missing++;
+    else if (description.includes("not our part")) summary["Not Our Part"]++;
+  }
+
+  return summary;
+}
+
+// Helper: Count scans per user
+function summarizeScanners(rows) {
+  const scanners = {};
+  for (const r of rows) {
+    const user = r[3] || "Unknown";
+    scanners[user] = (scanners[user] || 0) + 1;
+  }
+  return scanners;
+}
+
+// ===== Main handler =====
+export async function handler(event, context) {
+  const RETURN_URL = "https://returns.detroitaxle.com/returns/reports/condition";
+
+  try {
+    // Fetch remote data
+    const res = await safeFetch(RETURN_URL, { method: "GET" });
+    if (!res || !res.ok) {
+      console.warn("⚠️ Detroit Axle API unreachable. Returning empty dataset.");
+      return jsonResponse({
+        scanners: {},
+        classifications: {},
+        trend: [],
+      });
     }
 
-    const returnsHtml = await returnsRes.text();
+    const html = await res.text();
+    const rows = parseRows(html);
 
-    // --- 2️⃣ Parse Returns Data (Classification Table) ---
-    const rows = [...returnsHtml.matchAll(/<tr>(.*?)<\/tr>/gis)]
-      .map(r => r[1].replace(/<\/?[^>]+(>|$)/g, "").split(/\s+/).filter(Boolean))
-      .filter(cols => cols.length >= 4);
+    const scanners = summarizeScanners(rows);
+    const classifications = summarizeClassifications(rows);
 
-    let classifications = {};
-    let scanners = {};
-    let trends = {};
+    // Build basic trend (fake for now — backend daily grouping could be added)
+    const trend = Object.entries(scanners).map(([name, count]) => ({
+      date: new Date().toISOString().split("T")[0],
+      total: count,
+      scanner: name,
+    }));
 
-    for (const cols of rows) {
-      const date = cols[0] || "Unknown";
-      const scanner = cols[2] || "Unassigned";
-      const classification = cols[cols.length - 1] || "Unknown";
-
-      // Count by classification
-      classifications[classification] = (classifications[classification] || 0) + 1;
-
-      // Count by scanner
-      scanners[scanner] = (scanners[scanner] || 0) + 1;
-
-      // Count weekly trend by date
-      trends[date] = (trends[date] || 0) + 1;
-    }
-
-    // --- 3️⃣ Format Final Dashboard Data ---
-    const dashboard = {
+    return jsonResponse({
       scanners,
       classifications,
-      trends,
-      summary: {
-        totalReturns: rows.length,
-        timestamp: new Date().toISOString()
-      }
-    };
-
-    // --- 4️⃣ Return Data to Frontend ---
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(dashboard, null, 2)
-    };
-
+      trend,
+    });
   } catch (err) {
-    console.error("Dashboard Error:", err);
-
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Dashboard function failed", message: err.message })
-    };
+    console.error("❌ Dashboard Function Error:", err);
+    return jsonResponse({
+      scanners: {},
+      classifications: {},
+      trend: [],
+    });
   }
-};
+}
+
+// ===== Utility: Consistent JSON response =====
+function jsonResponse(data) {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  };
+}
