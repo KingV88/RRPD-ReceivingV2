@@ -1,262 +1,34 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>RRPD Receiving — Detroit Axle</title>
+<div id="loading" class="loading">Fetching data...</div>
 
-  <link rel="icon" href="favicon.ico">
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<section class="panel card">
+  <h2>Scanners</h2>
+  <button id="refresh_btn" class="btn">🔄 Refresh</button>
+  <table id="scanner_totals" class="data-table"></table>
+  <canvas id="scanner_chart"></canvas>
+</section>
 
-  <link rel="stylesheet" href="style.css">
-</head>
-<body class="theme-blue">
-  <!-- TOP NAV -->
-  <header class="topbar">
-    <div class="brand">
-      <img src="detroit-axle-logo.png" alt="Detroit Axle" class="logo">
-      <div>
-        <div class="title">RRPD Receiving</div>
-        <div class="subtitle">Returns & Receiving Dashboard</div>
-      </div>
-    </div>
+<section class="panel card">
+  <h2>Classifications</h2>
+  <table id="class_table" class="data-table"></table>
+  <canvas id="class_chart"></canvas>
+</section>
 
-    <nav class="tabs">
-      <button class="tab-btn active" data-target="dashboard">Dashboard</button>
-      <button class="tab-btn" data-target="scanners">Scanners</button>
-      <button class="tab-btn" data-target="classifications">Classifications</button>
-      <button class="tab-btn" data-target="miss">Miss Inspections</button>
-      <button class="tab-btn" data-target="carriers">Carriers</button>
-      <button class="tab-btn" data-target="racks">Racks</button>
-      <button class="tab-btn" data-target="manifest">Manifest</button>
-      <button class="tab-btn" data-target="training">Training & Quiz</button>
-      <button class="tab-btn" data-target="settings">Settings</button>
-    </nav>
+<section class="panel card">
+  <h2>Monthly Trend</h2>
+  <canvas id="trend_chart"></canvas>
+</section>
 
-    <div class="rightside">
-      <button id="refreshNowBtn" class="btn small">
-        <span id="refreshNowIcon">⟳</span>
-        <span id="refreshNowText">Refresh Now</span>
-      </button>
-      <span id="lastUpdatedStamp" class="muted"></span>
-    </div>
-  </header>
+<section class="panel card">
+  <h2>Miss Inspections</h2>
+  <table id="miss_table" class="data-table"></table>
+</section>
 
-  <!-- PANELS WRAP -->
-  <main class="panels">
+<section class="panel card">
+  <h2>Manual Add (Admin)</h2>
+  <input id="manual_name" placeholder="Scanner name">
+  <input id="manual_val" type="number" placeholder="Amount">
+  <button id="manual_add_btn" class="btn">Add</button>
+</section>
 
-    <!-- DASHBOARD -->
-    <section id="dashboard" class="panel active">
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Scanners — This Week</h3>
-          <div class="mini-row">
-            <div class="canvas-card"><canvas id="dash_scanners_donut"></canvas></div>
-            <div class="canvas-card"><canvas id="dash_scanners_bar"></canvas></div>
-          </div>
-          <div id="dash_scanners_summary" class="muted"></div>
-        </div>
-
-        <div class="card">
-          <h3>Carriers — This Week</h3>
-          <div class="mini-row">
-            <div class="canvas-card"><canvas id="dash_carriers_donut"></canvas></div>
-            <div class="canvas-card"><canvas id="dash_carriers_bar"></canvas></div>
-          </div>
-          <div id="dash_carriers_summary" class="muted"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SCANNERS -->
-    <section id="scanners" class="panel">
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Daily Share</h3>
-          <div class="canvas-card"><canvas id="scan_daily_donut"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Weekly Totals</h3>
-          <div class="canvas-card"><canvas id="scan_week_bar"></canvas></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>All-Time Totals (Admin Adjustable)</h3>
-        <div id="scan_alltime_table" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- CLASSIFICATIONS -->
-    <section id="classifications" class="panel">
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Today — Classification Mix</h3>
-          <div class="canvas-card"><canvas id="class_today_donut"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Monthly Trend</h3>
-          <div class="canvas-card"><canvas id="class_month_bar"></canvas></div>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Today — Details</h3>
-        <div id="class_today_table" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- MISS INSPECTIONS -->
-    <section id="miss" class="panel">
-      <div class="card">
-        <h3>Lookup by Tracking Number</h3>
-        <div class="form-row">
-          <input id="mi_tracking" placeholder="Enter tracking # (e.g., 1ZR0...)">
-          <button id="mi_lookup" class="btn">Search</button>
-          <input id="mi_reason" placeholder="Reason (manual)">
-          <button id="mi_save" class="btn alt">Save Miss Note</button>
-        </div>
-        <div id="mi_result" class="result"></div>
-      </div>
-    </section>
-
-    <!-- CARRIERS (manual) -->
-    <section id="carriers" class="panel">
-      <div class="card">
-        <h3>Daily Entry</h3>
-        <div class="form-row">
-          <input id="ca_date" type="date">
-          <input id="ca_fedex" type="number" placeholder="FedEx">
-          <input id="ca_ups" type="number" placeholder="UPS">
-          <input id="ca_usps" type="number" placeholder="USPS">
-          <input id="ca_other" type="number" placeholder="Other">
-          <button id="ca_save" class="btn">Save</button>
-          <button id="ca_export" class="btn alt">Export CSV</button>
-        </div>
-      </div>
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Today</h3>
-          <div class="canvas-card"><canvas id="ca_today_donut"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Last 7 Days</h3>
-          <div class="canvas-card"><canvas id="ca_week_bar"></canvas></div>
-        </div>
-      </div>
-      <div class="card">
-        <h3>History</h3>
-        <div id="ca_table" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- RACKS (manual) -->
-    <section id="racks" class="panel">
-      <div class="card">
-        <h3>Daily Entry</h3>
-        <div class="form-row">
-          <input id="rk_date" type="date">
-          <input id="rk_racks_good"  type="number" placeholder="Racks Good">
-          <input id="rk_racks_core"  type="number" placeholder="Racks Core">
-          <input id="rk_eracks_good" type="number" placeholder="E-Racks Good">
-          <input id="rk_eracks_core" type="number" placeholder="E-Racks Core">
-          <input id="rk_ax_good"     type="number" placeholder="Axles Good">
-          <input id="rk_ax_used"     type="number" placeholder="Axles Used">
-          <input id="rk_ds_good"     type="number" placeholder="Drive Shafts Good">
-          <input id="rk_ds_used"     type="number" placeholder="Drive Shafts Used">
-          <input id="rk_gb_good"     type="number" placeholder="Gearboxes Good">
-          <input id="rk_gb_used"     type="number" placeholder="Gearboxes Used">
-          <button id="rk_save" class="btn">Save</button>
-          <button id="rk_reset" class="btn alt">Reset Logs (Admin)</button>
-        </div>
-      </div>
-
-      <div class="grid grid-3">
-        <div class="card"><h3>Racks</h3><div class="canvas-card"><canvas id="rk_donut_racks"></canvas></div></div>
-        <div class="card"><h3>E-Racks</h3><div class="canvas-card"><canvas id="rk_donut_eracks"></canvas></div></div>
-        <div class="card"><h3>Axles</h3><div class="canvas-card"><canvas id="rk_donut_ax"></canvas></div></div>
-        <div class="card"><h3>Drive Shafts</h3><div class="canvas-card"><canvas id="rk_donut_ds"></canvas></div></div>
-        <div class="card"><h3>Gearboxes</h3><div class="canvas-card"><canvas id="rk_donut_gb"></canvas></div></div>
-      </div>
-
-      <div class="card">
-        <h3>Weekly Combined</h3>
-        <div class="canvas-card"><canvas id="rk_week_stack"></canvas></div>
-      </div>
-
-      <div class="card">
-        <h3>Log</h3>
-        <div id="rk_table" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- MANIFEST -->
-    <section id="manifest" class="panel">
-      <div class="card">
-        <h3>Upload Manifest (CSV) & Compare</h3>
-        <div class="form-row">
-          <input id="mf_date" type="date">
-          <input id="mf_file" type="file" accept=".csv">
-          <button id="mf_parse" class="btn">Check Against API</button>
-          <button id="mf_export_missing" class="btn alt">Export Missing CSV</button>
-        </div>
-        <div id="mf_result" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <!-- TRAINING & QUIZ -->
-    <section id="training" class="panel">
-      <div class="grid grid-2">
-        <div class="card">
-          <h3>Training — English / Español</h3>
-          <label class="toggle"><input id="tr_bilingual" type="checkbox"> Show English & Español</label>
-          <div class="train-wrap">
-            <div id="tr_en" class="train"></div>
-            <div id="tr_es" class="train"></div>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Quiz</h3>
-          <div id="quiz_editor" class="muted small"></div>
-          <button id="quiz_start" class="btn">Start Quiz</button>
-          <div id="quiz_log" class="table-wrap"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SETTINGS -->
-    <section id="settings" class="panel">
-      <div class="card">
-        <h3>Admin</h3>
-        <div class="form-row">
-          <input id="ad_user" placeholder="Admin user">
-          <input id="ad_pass" placeholder="Password" type="password">
-          <button id="ad_login" class="btn">Login</button>
-          <button id="ad_logout" class="btn alt">Logout</button>
-          <span id="ad_badge" class="muted"></span>
-        </div>
-      </div>
-
-      <div id="admin_zone" class="grid grid-2" style="display:none">
-        <div class="card">
-          <h3>Scanner All-Time Adjust</h3>
-          <div id="ad_scanner_adjust"></div>
-        </div>
-        <div class="card">
-          <h3>Data & Backup</h3>
-          <div class="form-row">
-            <button id="bk_download" class="btn">Backup JSON</button>
-            <button id="bk_restore" class="btn alt">Restore JSON</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- TOAST -->
-  <div id="toast" class="toast"></div>
-
-  <script src="script.js" defer></script>
-</body>
-</html>
+<p class="small">Last updated: <span id="last_upd">—</span></p>
+<div id="toast" class="toast"></div>
