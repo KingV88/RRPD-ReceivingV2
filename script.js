@@ -1,72 +1,156 @@
 console.log("RRPD Dashboard Script Loaded");
 
-document.addEventListener("DOMContentLoaded", () => {
-  const loading = document.getElementById("loading");
-  const refreshBtn = document.getElementById("refresh_btn");
-  const panels = document.querySelectorAll(".panel");
-  const tabs = document.querySelectorAll(".tab");
+// ===== CONFIG =====
+const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+const DASHBOARD_API = "/api/dashboard";
 
-  tabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      tabs.forEach(t => t.classList.remove("active"));
-      panels.forEach(p => p.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById(tab.dataset.tab).classList.add("active");
-    });
+// ===== MAIN LOAD =====
+document.addEventListener("DOMContentLoaded", async () => {
+  document.querySelector("#loading").textContent = "Fetching data...";
+  const data = await fetchData();
+  renderDashboard(data);
+
+  // Manual refresh
+  document.getElementById("refresh_btn").addEventListener("click", async () => {
+    document.querySelector("#loading").textContent = "Refreshing...";
+    const newData = await fetchData();
+    renderDashboard(newData);
   });
 
-  async function fetchData() {
-    loading.textContent = "Fetching data...";
-    try {
-      const res = await fetch("/api/dashboard");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      console.log("Data fetched:", data);
-      loading.textContent = "Data loaded successfully.";
-      renderScanners(data.scanners);
-      renderClassifications(data.classifications);
-      renderTrend(data.trends);
-    } catch (err) {
-      console.error("Error loading data:", err);
-      loading.textContent = "Error fetching data — using local fallback.";
+  // Auto refresh every 15 min
+  setInterval(async () => {
+    console.log("Auto refreshing dashboard...");
+    const updated = await fetchData();
+    renderDashboard(updated);
+  }, REFRESH_INTERVAL);
+});
+
+// ===== FETCH DATA =====
+async function fetchData() {
+  try {
+    const res = await fetch(DASHBOARD_API);
+    const data = await res.json();
+
+    if (!data || !data.scanners) {
+      console.warn("⚠️ API returned no data, using fallback.");
+      document.querySelector("#loading").textContent =
+        "Error fetching data — using local fallback.";
+      return getFallbackData();
     }
+
+    console.log("✅ Data fetched:", data);
+    document.querySelector("#loading").textContent = "Data loaded successfully.";
+    return data;
+  } catch (err) {
+    console.error("❌ Fetch error:", err);
+    document.querySelector("#loading").textContent =
+      "Error fetching data — using local fallback.";
+    return getFallbackData();
   }
+}
 
-  refreshBtn.addEventListener("click", fetchData);
-  fetchData();
+// ===== FALLBACK DATA =====
+function getFallbackData() {
+  return {
+    scanners: {
+      "Jarees Washington": 0,
+      "Ress Washington": 0,
+      "Julio Faburrieta Garcia": 0,
+      "Jefferson Granados": 0,
+    },
+    classifications: {
+      Good: 0,
+      Used: 0,
+      Core: 0,
+      Damaged: 0,
+      Missing: 0,
+      "Not Our Part": 0,
+    },
+    trend: [],
+  };
+}
 
-  function renderScanners(scanners) {
-    const table = document.getElementById("scanner_totals");
-    table.innerHTML = `
-      <tr><th>Scanner</th><th>Total</th></tr>
-      ${Object.entries(scanners)
-        .map(([name, val]) => `<tr><td>${name}</td><td>${val}</td></tr>`)
+// ===== RENDER DASHBOARD =====
+function renderDashboard(data) {
+  console.log("Rendering dashboard...");
+
+  // Render scanners
+  const scannerTable = document.getElementById("scanner_totals");
+  if (scannerTable && data && data.scanners) {
+    scannerTable.innerHTML = `
+      <tr><th>Scanner</th><th>Count</th></tr>
+      ${Object.entries(data.scanners)
+        .map(([name, count]) => `<tr><td>${name}</td><td>${count}</td></tr>`)
         .join("")}
     `;
   }
 
-  function renderClassifications(classes) {
-    const table = document.getElementById("class_table");
-    table.innerHTML = `
-      <tr><th>Type</th><th>Count</th></tr>
-      ${Object.entries(classes)
-        .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
+  // Render classifications
+  const classTable = document.getElementById("class_table");
+  if (classTable && data && data.classifications) {
+    classTable.innerHTML = `
+      <tr><th>Classification</th><th>Count</th></tr>
+      ${Object.entries(data.classifications)
+        .map(([type, count]) => `<tr><td>${type}</td><td>${count}</td></tr>`)
         .join("")}
     `;
   }
 
-  function renderTrend(trends) {
-    const ctx = document.getElementById("trend_chart").getContext("2d");
-    new Chart(ctx, {
-      type: "bar",
+  // Render Miss Inspections placeholder
+  const missTable = document.getElementById("miss_table");
+  if (missTable) {
+    missTable.innerHTML = `<tr><td colspan="2">No missed inspections logged.</td></tr>`;
+  }
+
+  // Render charts
+  renderCharts(data);
+}
+
+// ===== RENDER CHARTS =====
+function renderCharts(data) {
+  const classCtx = document.getElementById("class_chart");
+  const trendCtx = document.getElementById("trend_chart");
+
+  if (classCtx && data && data.classifications) {
+    const labels = Object.keys(data.classifications);
+    const values = Object.values(data.classifications);
+    new Chart(classCtx, {
+      type: "doughnut",
       data: {
-        labels: Object.keys(trends),
-        datasets: [{
-          label: "Weekly Totals",
-          data: Object.values(trends),
-          backgroundColor: "#0284ff"
-        }]
-      }
+        labels,
+        datasets: [
+          {
+            label: "Classifications",
+            data: values,
+            backgroundColor: [
+              "#007bff",
+              "#6c757d",
+              "#ffc107",
+              "#dc3545",
+              "#6610f2",
+              "#198754",
+            ],
+          },
+        ],
+      },
     });
   }
-});
+
+  if (trendCtx && data && Array.isArray(data.trend)) {
+    const labels = data.trend.map((t) => t.date);
+    const values = data.trend.map((t) => t.total);
+    new Chart(trendCtx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Daily Trend",
+            data: values,
+            backgroundColor: "#0d6efd",
+          },
+        ],
+      },
+    });
+  }
+}
