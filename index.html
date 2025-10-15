@@ -1,34 +1,77 @@
-<div id="loading" class="loading">Fetching data...</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RRPD Receiving Dashboard</title>
 
-<section class="panel card">
-  <h2>Scanners</h2>
-  <button id="refresh_btn" class="btn">🔄 Refresh</button>
-  <table id="scanner_totals" class="data-table"></table>
-  <canvas id="scanner_chart"></canvas>
-</section>
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css" />
 
-<section class="panel card">
-  <h2>Classifications</h2>
-  <table id="class_table" class="data-table"></table>
-  <canvas id="class_chart"></canvas>
-</section>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<section class="panel card">
-  <h2>Monthly Trend</h2>
-  <canvas id="trend_chart"></canvas>
-</section>
+  <!-- Main Script -->
+  <script src="script.js" defer></script>
+</head>
 
-<section class="panel card">
-  <h2>Miss Inspections</h2>
-  <table id="miss_table" class="data-table"></table>
-</section>
+<body>
+  <header>
+    <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo" />
+    <h1>RRPD Receiving Dashboard</h1>
+    <nav>
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="scanners">Scanners</button>
+      <button class="tab" data-tab="classifications">Classifications</button>
+      <button class="tab" data-tab="trend">Monthly Trend</button>
+      <button class="tab" data-tab="miss">Miss Inspections</button>
+      <button class="tab" data-tab="manual">Manual Add</button>
+    </nav>
+  </header>
 
-<section class="panel card">
-  <h2>Manual Add (Admin)</h2>
-  <input id="manual_name" placeholder="Scanner name">
-  <input id="manual_val" type="number" placeholder="Amount">
-  <button id="manual_add_btn" class="btn">Add</button>
-</section>
+  <main>
+    <div id="loading" class="loading">Fetching data...</div>
 
-<p class="small">Last updated: <span id="last_upd">—</span></p>
-<div id="toast" class="toast"></div>
+    <section id="dashboard" class="panel active">
+      <h2>Overall Dashboard</h2>
+      <canvas id="overview_chart"></canvas>
+      <div id="totals_summary" class="data-table"></div>
+    </section>
+
+    <section id="scanners" class="panel">
+      <h2>Scanners</h2>
+      <button id="refresh_btn" class="btn">⟳ Refresh</button>
+      <table id="scanner_totals" class="data-table"></table>
+      <canvas id="scanner_chart"></canvas>
+    </section>
+
+    <section id="classifications" class="panel">
+      <h2>Classifications</h2>
+      <table id="class_table" class="data-table"></table>
+      <canvas id="class_chart"></canvas>
+    </section>
+
+    <section id="trend" class="panel">
+      <h2>Monthly Trend</h2>
+      <canvas id="trend_chart"></canvas>
+    </section>
+
+    <section id="miss" class="panel">
+      <h2>Miss Inspections</h2>
+      <table id="miss_table" class="data-table"></table>
+    </section>
+
+    <section id="manual" class="panel">
+      <h2>Manual Add (Admin)</h2>
+      <input id="manual_name" type="text" placeholder="Scanner name" />
+      <input id="manual_val" type="number" placeholder="Amount" />
+      <button id="manual_add_btn" class="btn">Add</button>
+      <p>Last updated: <span id="last_update">—</span></p>
+    </section>
+  </main>
+
+  <footer>
+    <p>© 2025 RRPD Receiving Dashboard | Powered by Detroit Axle Data</p>
+  </footer>
+</body>
+</html>
