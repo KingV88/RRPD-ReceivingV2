@@ -1,222 +1,224 @@
-// === RRPD Dashboard Script (Final + Weekly Stacked Chart) ===
+// -------------------------------
+// RRPD Receiving Dashboard Script
+// -------------------------------
 
-const API_URL = "/.netlify/functions/dashboard";
-const statusEl = document.getElementById("status");
-let charts = {};
+// Function endpoint (Netlify)
+const API_DASH = "/.netlify/functions/dashboard";
 
-// ======================
+// Chart instances for cleanup
+let scannerChart, classChart, dailyChart, weeklyChart;
+
+// On page load
+document.addEventListener("DOMContentLoaded", () => {
+  initDashboard();
+});
+
+// -------------------------------
+// Initialize dashboard
+// -------------------------------
+function initDashboard() {
+  console.log("RRPD Dashboard Script Loaded");
+
+  // Attach buttons
+  const refreshBtn = document.getElementById("refresh_btn");
+  if (refreshBtn) refreshBtn.addEventListener("click", fetchDashboard);
+
+  document.querySelectorAll("nav button").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const target = e.target.getAttribute("data-target");
+      document.querySelectorAll("section").forEach((sec) =>
+        sec.classList.toggle("active", sec.id === target)
+      );
+    });
+  });
+
+  // Manual Add handlers
+  setupManualAdd("carrier");
+  setupManualAdd("rack");
+
+  // Load data
+  fetchDashboard();
+}
+
+// -------------------------------
 // Fetch Dashboard Data
-// ======================
+// -------------------------------
 async function fetchDashboard() {
+  setStatus("Fetching data...");
+
   try {
-    statusEl.textContent = "Fetching data...";
-    const res = await fetch(API_URL);
+    const res = await fetch(API_DASH, { cache: "no-store" });
     if (!res.ok) throw new Error(`Upstream ${res.status}`);
+
     const data = await res.json();
-    if (!data || !data.scanners) throw new Error("Empty data");
+    console.log("Data fetched:", data);
 
-    statusEl.textContent = `Updated: ${new Date(
-      data.updated
-    ).toLocaleTimeString()} — Live API`;
-    return data;
-  } catch (err) {
-    console.warn("API fallback:", err.message);
-    statusEl.textContent = "API unavailable — using local data";
+    // Validate
+    if (!data.scanners || Object.keys(data.scanners).length === 0)
+      throw new Error("Empty or invalid data");
 
-    // Mock fallback data
-    return {
-      scanners: {
-        "Jarees Washington": 1800,
-        "Ress Washington": 1300,
-        "Julio Faburrieta Garcia": 950,
-        "Jefferson Granados": 1650,
-        "Michelle Ayala": 520,
-        "Janice Machado": 870,
-      },
-      classifications: {
-        Good: 320,
-        Used: 110,
-        Core: 85,
-        Scrap: 40,
-      },
-      daily: [
-        { date: "Mon", total: 890 },
-        { date: "Tue", total: 720 },
-        { date: "Wed", total: 1250 },
-        { date: "Thu", total: 1478 },
-        { date: "Fri", total: 978 },
-      ],
-      weekly: [
-        { week: "Week 1", fedex: 2300, ups: 1200, usps: 800 },
-        { week: "Week 2", fedex: 2600, ups: 950, usps: 740 },
-        { week: "Week 3", fedex: 2800, ups: 1300, usps: 650 },
-      ],
-      updated: new Date().toISOString(),
-    };
+    setStatus(`Updated: ${new Date(data.updated).toLocaleTimeString()}`);
+    renderAll(data);
+  } catch (e) {
+    console.warn("API fallback:", e.message);
+    setStatus("API unavailable — using local mode");
+    renderAll(localFallback());
   }
 }
 
-// ======================
-// Chart Renderers
-// ======================
-function renderAllCharts(data) {
-  Object.values(charts).forEach((chart) => chart.destroy());
-  charts = {};
+// -------------------------------
+// Render All Sections
+// -------------------------------
+function renderAll(data) {
+  renderScanners(data.scanners);
+  renderClassifications(data.classifications);
+  renderTrends(data.daily, data.weekly);
+}
 
-  // 1️⃣ Today Chart
-  charts.today = new Chart(document.getElementById("chart_today"), {
+// -------------------------------
+// Render Scanners Chart
+// -------------------------------
+function renderScanners(scanners) {
+  const ctx = document.getElementById("scanner_chart");
+  const table = document.getElementById("scanner_totals");
+
+  if (!ctx || !table) return;
+
+  const names = Object.keys(scanners);
+  const totals = Object.values(scanners);
+
+  table.innerHTML =
+    "<tr><th>Scanner</th><th>Count</th></tr>" +
+    names.map((n, i) => `<tr><td>${n}</td><td>${totals[i]}</td></tr>`).join("");
+
+  if (scannerChart) scannerChart.destroy();
+  scannerChart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels: Object.keys(data.scanners),
+      labels: names,
       datasets: [
         {
-          label: "Today’s Scans",
-          data: Object.values(data.scanners).map((v) =>
-            Math.floor(v * 0.2 + Math.random() * 20)
-          ),
-          backgroundColor: "#00aaff",
+          label: "All-Time (From API)",
+          data: totals,
+          backgroundColor: "rgba(0, 153, 255, 0.7)",
         },
       ],
     },
-    options: { responsive: true, plugins: { legend: { display: false } } },
+    options: { responsive: true, maintainAspectRatio: false },
   });
+}
 
-  // 2️⃣ Daily Chart (This Week)
-  charts.daily = new Chart(document.getElementById("chart_daily"), {
-    type: "line",
-    data: {
-      labels: data.daily.map((d) => d.date),
-      datasets: [
-        {
-          label: "Total per Day",
-          data: data.daily.map((d) => d.total),
-          borderColor: "#00ccff",
-          backgroundColor: "rgba(0,204,255,0.3)",
-          tension: 0.3,
-          fill: true,
-        },
-      ],
-    },
-    options: { responsive: true },
-  });
+// -------------------------------
+// Render Classifications
+// -------------------------------
+function renderClassifications(classifications) {
+  const ctx = document.getElementById("class_chart");
+  const table = document.getElementById("class_table");
 
-  // 3️⃣ Weekly Stacked Chart (NEW)
-  charts.weeklyStacked = new Chart(
-    document.getElementById("chart_weeklyStacked"),
-    {
-      type: "bar",
-      data: {
-        labels: data.weekly.map((w) => w.week),
-        datasets: [
-          {
-            label: "FedEx",
-            data: data.weekly.map((w) => w.fedex),
-            backgroundColor: "#ff6666",
-          },
-          {
-            label: "UPS",
-            data: data.weekly.map((w) => w.ups),
-            backgroundColor: "#ffcc00",
-          },
-          {
-            label: "USPS",
-            data: data.weekly.map((w) => w.usps),
-            backgroundColor: "#66cc66",
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        scales: {
-          x: { stacked: true },
-          y: { stacked: true },
-        },
-      },
-    }
-  );
+  if (!ctx || !table) return;
 
-  // 4️⃣ All-Time Scanners
-  charts.alltime = new Chart(document.getElementById("chart_alltime"), {
-    type: "bar",
-    data: {
-      labels: Object.keys(data.scanners),
-      datasets: [
-        {
-          label: "All-Time Scans",
-          data: Object.values(data.scanners),
-          backgroundColor: "#0099ff",
-        },
-      ],
-    },
-    options: { responsive: true },
-  });
+  const labels = Object.keys(classifications);
+  const values = Object.values(classifications);
 
-  // 5️⃣ Classification Mix
-  charts.classToday = new Chart(document.getElementById("class_today"), {
+  table.innerHTML =
+    "<tr><th>Type</th><th>Count</th></tr>" +
+    labels.map((t, i) => `<tr><td>${t}</td><td>${values[i]}</td></tr>`).join("");
+
+  if (classChart) classChart.destroy();
+  classChart = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: Object.keys(data.classifications),
+      labels,
       datasets: [
         {
-          data: Object.values(data.classifications),
-          backgroundColor: ["#00ff88", "#ffaa00", "#ff4444", "#7777ff"],
+          data: values,
+          backgroundColor: ["#4CAF50", "#FF9800", "#F44336", "#2196F3"],
         },
       ],
     },
-    options: { responsive: true },
-  });
-
-  // 6️⃣ Classification Monthly Trend
-  charts.classMonthly = new Chart(document.getElementById("class_monthly"), {
-    type: "bar",
-    data: {
-      labels: Object.keys(data.classifications),
-      datasets: [
-        {
-          label: "Monthly Totals",
-          data: Object.values(data.classifications).map(
-            (v) => v + Math.floor(Math.random() * 50)
-          ),
-          backgroundColor: ["#00ff88", "#ffaa00", "#ff4444", "#7777ff"],
-        },
-      ],
-    },
-    options: { responsive: true },
+    options: { responsive: true, maintainAspectRatio: false },
   });
 }
 
-// ======================
-// Tab Navigation
-// ======================
-const tabs = document.querySelectorAll("nav.tabs button");
-const sections = document.querySelectorAll(".tab-content");
+// -------------------------------
+// Render Trends (Daily + Weekly)
+// -------------------------------
+function renderTrends(daily, weekly) {
+  const dailyCtx = document.getElementById("trend_chart");
+  const weeklyCtx = document.getElementById("weekly_chart");
 
-tabs.forEach((tab) => {
-  tab.addEventListener("click", () => {
-    tabs.forEach((t) => t.classList.remove("active"));
-    sections.forEach((s) => s.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById(tab.dataset.tab).classList.add("active");
-  });
-});
+  if (dailyChart) dailyChart.destroy();
+  if (weeklyChart) weeklyChart.destroy();
 
-// ======================
-// Initialize
-// ======================
-async function init() {
-  const data = await fetchDashboard();
-  renderAllCharts(data);
+  // Daily Totals
+  if (dailyCtx && daily?.length) {
+    const labels = daily.map((d) => d.date);
+    const values = daily.map((d) => d.total);
+    dailyChart = new Chart(dailyCtx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{ label: "Daily Totals", data: values, borderColor: "#03A9F4" }],
+      },
+      options: { responsive: true, maintainAspectRatio: false },
+    });
+  }
+
+  // Weekly Totals
+  if (weeklyCtx && weekly?.length) {
+    const labels = weekly.map((w) => w.week);
+    const values = weekly.map((w) => w.fedex + w.ups + w.usps);
+    weeklyChart = new Chart(weeklyCtx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Weekly Totals", data: values, backgroundColor: "#00BCD4" },
+        ],
+      },
+      options: { responsive: true, maintainAspectRatio: false },
+    });
+  }
 }
 
-document.body.insertAdjacentHTML(
-  "beforeend",
-  `<button id="refresh_btn" class="btn" style="position:fixed; top:12px; right:12px; z-index:999;">⟳ Refresh</button>`
-);
+// -------------------------------
+// Manual Add / Reset Functions
+// -------------------------------
+function setupManualAdd(type) {
+  const addBtn = document.getElementById(`${type}_add`);
+  const resetBtn = document.getElementById(`${type}_reset`);
+  const table = document.getElementById(`${type}_table`);
 
-document.getElementById("refresh_btn").addEventListener("click", init);
+  if (!addBtn || !resetBtn || !table) return;
 
-// Auto-refresh every 5 minutes
-setInterval(init, 5 * 60 * 1000);
+  addBtn.addEventListener("click", () => {
+    const name = document.getElementById(`${type}_name`).value.trim();
+    const val = parseInt(document.getElementById(`${type}_val`).value.trim());
+    if (!name || isNaN(val)) return alert("Invalid entry");
+    const row = document.createElement("tr");
+    row.innerHTML = `<td>${name}</td><td>${val}</td>`;
+    table.appendChild(row);
+  });
 
-// Start
-init();
+  resetBtn.addEventListener("click", () => {
+    table.innerHTML = "<tr><th>Name</th><th>Count</th></tr>";
+  });
+}
+
+// -------------------------------
+// Helpers
+// -------------------------------
+function setStatus(text) {
+  const status = document.getElementById("status");
+  if (status) status.textContent = text;
+}
+
+function localFallback() {
+  return {
+    scanners: { Sample1: 50, Sample2: 75 },
+    classifications: { Good: 10, Used: 20, Core: 15 },
+    daily: [{ date: "2025-10-16", total: 100 }],
+    weekly: [{ week: "Week 1", fedex: 50, ups: 30, usps: 20 }],
+    updated: new Date().toISOString(),
+  };
+}
