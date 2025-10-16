@@ -1,3 +1,4 @@
+const API = "https://rrpd.netlify.app/.netlify/functions/dashboard";
 console.log("RRPD Dashboard Script Loaded");
 
 const API = "/.netlify/functions/dashboard";
