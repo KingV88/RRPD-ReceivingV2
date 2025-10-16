@@ -1,6 +1,7 @@
-import fetch from "node-fetch";
+import * as fetchModule from "node-fetch";
+const fetch = fetchModule.default || fetchModule;
 
-// tiny timeout helper so we never hang
+// Safe fetch with timeout
 async function safeFetch(url, ms = 15000) {
   const ctl = new AbortController();
   const id = setTimeout(() => ctl.abort(), ms);
@@ -14,31 +15,63 @@ async function safeFetch(url, ms = 15000) {
   }
 }
 
+// Helper to extract quantity multiplier from part number
+function extractQty(partNum = "") {
+  // Match patterns like "x2", "2x", "X4", "x10", etc.
+  const match = partNum.match(/(?:x\s*|X\s*|)(\d+)(?:x|X)?$/);
+  if (!match) return 1;
+  const qty = parseInt(match[1], 10);
+  return isNaN(qty) ? 1 : qty;
+}
+
 export const handler = async () => {
   const API = "https://returns.detroitaxle.com/api/returns";
+
   try {
     const res = await safeFetch(API);
     if (!res.ok) throw new Error(`Upstream ${res.status}`);
-    const arr = await res.json(); // array of returns
+    const arr = await res.json();
 
-    // shape -> you may need to tweak field names if the API differs
     const scanners = {};
     const classifications = {};
+    const missed = [];
+
     for (const r of arr) {
       const who = (r.createdBy || r.scanned_by || "Unknown").trim();
       const cls = (r.description || r.classification || "Unclassified").trim();
-      scanners[who] = (scanners[who] || 0) + 1;
-      classifications[cls] = (classifications[cls] || 0) + 1;
+      const part = (r.partNumber || r.part_number || "").trim();
+
+      // Extract quantity multiplier (e.g. x2, 2x, x4, etc.)
+      const qty = extractQty(part);
+
+      // Add to scanner totals
+      scanners[who] = (scanners[who] || 0) + qty;
+
+      // Add to classification totals
+      const key = cls.toLowerCase();
+      if (["good", "used", "core", "damaged", "return label"].some(k => key.includes(k))) {
+        classifications[key] = (classifications[key] || 0) + qty;
+      } else {
+        missed.push({ part, cls });
+      }
     }
 
-    return json({ scanners, classifications, updated: new Date().toISOString() });
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        scanners,
+        classifications,
+        missed,
+        updated: new Date().toISOString()
+      })
+    };
   } catch (err) {
-    console.error("dashboard.js error:", err.message);
-    // graceful empty payload so frontend never crashes
-    return json({ scanners: {}, classifications: {}, updated: new Date().toISOString(), error: err.message });
+    console.error("Dashboard API error:", err.message);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: err.message
+      })
+    };
   }
 };
-
-function json(body) {
-  return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-}
