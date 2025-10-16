@@ -1,197 +1,153 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RRPD Receiving Dashboard</title>
-  <link rel="icon" href="favicon.ico" />
   <link rel="stylesheet" href="style.css" />
-
-  <!-- Chart.js (charts) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <!-- Tesseract.js (image OCR for manifest) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
-  <!-- PDF.js (to render PDF pages into canvases we can OCR) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.js"></script>
-  <script>
-    // PDF.js worker
-    window.pdfjsLib = window.pdfjsLib || {};
-    pdfjsLib.GlobalWorkerOptions = {
-      workerSrc: "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.js"
-    };
-  </script>
-
-  <!-- Main app logic -->
-  <script defer src="script.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <header class="appbar">
+  <header class="header">
     <div class="brand">
-      <div class="logo-square">DA</div>
-      <div>
-        <h1>RRPD Receiving Dashboard</h1>
-        <small id="status_text">Loading…</small>
-      </div>
+      <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo" />
+      RRPD Receiving Dashboard
     </div>
-    <button id="refresh_btn" class="btn primary">⟳ Refresh Now</button>
+    <div class="status" id="status">Fetching data...</div>
   </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-target="panel_dashboard">Dashboard</button>
-    <button class="tab" data-target="panel_scanners">Scanners</button>
-    <button class="tab" data-target="panel_class">Classifications</button>
-    <button class="tab" data-target="panel_carriers">Carriers</button>
-    <button class="tab" data-target="panel_racks">Racks</button>
-    <button class="tab" data-target="panel_training">Training & Quiz</button>
-    <button class="tab" data-target="panel_settings">Settings</button>
-    <button class="tab" data-target="panel_manifest">Manifest</button> <!-- LAST -->
+  <!-- Navigation -->
+  <nav class="nav-tabs">
+    <button class="active" data-tab="dashboard">Dashboard</button>
+    <button data-tab="scanners">Scanners</button>
+    <button data-tab="classifications">Classifications</button>
+    <button data-tab="carriers">Carriers</button>
+    <button data-tab="racks">Racks</button>
+    <button data-tab="training">Training & Quiz</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="manifest">Manifest</button>
   </nav>
 
   <main class="content">
-
-    <!-- DASHBOARD (overview charts) -->
-    <section id="panel_dashboard" class="panel show">
+    <!-- DASHBOARD -->
+    <section id="dashboard" class="tab-content active">
       <div class="grid two">
         <div class="card">
-          <div class="card-title">Daily Share</div>
-          <canvas id="chart_daily"></canvas>
+          <h2>Today</h2>
+          <canvas id="chart_today"></canvas>
         </div>
         <div class="card">
-          <div class="card-title">Weekly Totals</div>
-          <canvas id="chart_weekly"></canvas>
+          <h2>Daily Totals</h2>
+          <canvas id="chart_daily"></canvas>
         </div>
       </div>
-
-      <div class="card">
-        <div class="card-title">All-Time Totals (from API)</div>
-        <table id="table_alltime" class="data-table">
-          <thead><tr><th>Scanner</th><th>Count</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div class="grid two">
+        <div class="card">
+          <h2>Weekly Carrier Breakdown</h2>
+          <canvas id="chart_weeklyStacked"></canvas>
+        </div>
+        <div class="card">
+          <h2>All-Time Scanners</h2>
+          <canvas id="chart_alltime"></canvas>
+        </div>
       </div>
     </section>
 
     <!-- SCANNERS -->
-    <section id="panel_scanners" class="panel">
-      <div class="grid two">
-        <div class="card">
-          <div class="card-title">Today</div>
-          <canvas id="chart_scanners_today"></canvas>
-        </div>
-        <div class="card">
-          <div class="card-title">Daily (This Week)</div>
-          <canvas id="chart_scanners_week"></canvas>
-        </div>
-      </div>
-
-      <details class="card">
-        <summary class="card-title">Manual fallback (only used if API is down)</summary>
-        <div class="manual-row">
-          <input id="manual_name" placeholder="Scanner name e.g. Jeff" />
+    <section id="scanners" class="tab-content">
+      <div class="card">
+        <h2>Scanners</h2>
+        <div class="form">
+          <input id="manual_scanner" placeholder="Scanner name" />
           <input id="manual_val" type="number" placeholder="Count" />
-          <button id="manual_add" class="btn">Add</button>
-          <button id="manual_reset" class="btn danger">Reset Today</button>
+          <button class="btn">Add</button>
         </div>
-        <small id="manual_note">Manual entries are stored locally and merged into charts for today only.</small>
-      </details>
+        <table class="data-table">
+          <thead>
+            <tr><th>Scanner</th><th>Count</th></tr>
+          </thead>
+          <tbody id="scanner_table"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- CLASSIFICATIONS -->
-    <section id="panel_class" class="panel">
+    <section id="classifications" class="tab-content">
       <div class="grid two">
         <div class="card">
-          <div class="card-title">Today — Classification Mix</div>
-          <canvas id="chart_class_today"></canvas>
+          <h2>Classification Mix (Today)</h2>
+          <canvas id="class_today"></canvas>
         </div>
         <div class="card">
-          <div class="card-title">Monthly Trend</div>
-          <canvas id="chart_class_month"></canvas>
+          <h2>Monthly Trend</h2>
+          <canvas id="class_monthly"></canvas>
         </div>
       </div>
+    </section>
 
+    <!-- CARRIERS -->
+    <section id="carriers" class="tab-content">
       <div class="card">
-        <div class="card-title">Today — Details</div>
-        <table id="table_class_today" class="data-table">
+        <h2>Carriers</h2>
+        <div class="form">
+          <input placeholder="Carrier name" />
+          <input type="number" placeholder="Count" />
+          <button class="btn">Add</button>
+        </div>
+        <table class="data-table">
           <thead>
-            <tr><th>Time</th><th>Scanner</th><th>Status</th><th>Tracking / Part #</th><th>Qty</th></tr>
+            <tr><th>Carrier</th><th>Count</th></tr>
           </thead>
-          <tbody></tbody>
         </table>
       </div>
     </section>
 
-    <!-- CARRIERS (manual) -->
-    <section id="panel_carriers" class="panel">
+    <!-- RACKS -->
+    <section id="racks" class="tab-content">
       <div class="card">
-        <div class="card-title">Carriers (Manual)</div>
-        <div class="manual-row">
-          <input id="carrier_name" placeholder="Carrier name" />
-          <input id="carrier_count" type="number" placeholder="Count" />
-          <button id="carrier_add" class="btn">Add</button>
-          <button id="carrier_reset" class="btn danger">Reset</button>
+        <h2>Racks</h2>
+        <div class="form">
+          <input placeholder="Rack / Bay" />
+          <input type="number" placeholder="Count" />
+          <button class="btn">Add</button>
         </div>
-        <table id="table_carriers" class="data-table">
-          <thead><tr><th>Carrier</th><th>Count</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- RACKS (manual) -->
-    <section id="panel_racks" class="panel">
-      <div class="card">
-        <div class="card-title">Racks (Manual)</div>
-        <div class="manual-row">
-          <input id="rack_name" placeholder="Rack / Bay" />
-          <input id="rack_count" type="number" placeholder="Count" />
-          <button id="rack_add" class="btn">Add</button>
-          <button id="rack_reset" class="btn danger">Reset</button>
-        </div>
-        <table id="table_racks" class="data-table">
-          <thead><tr><th>Rack</th><th>Count</th></tr></thead>
-          <tbody></tbody>
+        <table class="data-table">
+          <thead>
+            <tr><th>Rack</th><th>Count</th></tr>
+          </thead>
         </table>
       </div>
     </section>
 
     <!-- TRAINING -->
-    <section id="panel_training" class="panel">
+    <section id="training" class="tab-content">
       <div class="card">
-        <div class="card-title">Training & Quiz (placeholder)</div>
-        <p>Upload docs or link quizzes here later.</p>
+        <h2>Training & Quiz</h2>
+        <p>Interactive training module coming soon.</p>
       </div>
     </section>
 
     <!-- SETTINGS -->
-    <section id="panel_settings" class="panel">
+    <section id="settings" class="tab-content">
       <div class="card">
-        <div class="card-title">Settings</div>
-        <div class="manual-row">
-          <label>Auto refresh (minutes):</label>
-          <input id="minutes_input" type="number" min="1" value="15" />
-          <button id="minutes_save" class="btn">Save</button>
-        </div>
-        <p><small>Dashboard also shows a manual “Refresh Now” button.</small></p>
+        <h2>Settings</h2>
+        <p>Admin access and data control area.</p>
       </div>
     </section>
 
-    <!-- MANIFEST (LAST PANEL) -->
-    <section id="panel_manifest" class="panel">
+    <!-- MANIFEST -->
+    <section id="manifest" class="tab-content">
       <div class="card">
-        <div class="card-title">Manifest (PDF or image)</div>
-        <div class="manual-row">
-          <input id="manifest_file" type="file" accept="application/pdf,image/*" />
-          <button id="manifest_run" class="btn">Process</button>
-          <button id="manifest_clear" class="btn danger">Clear</button>
-        </div>
-        <div id="manifest_progress" class="muted"></div>
-        <table id="table_manifest" class="data-table">
-          <thead><tr><th>Tracking / Part</th><th>Qty</th><th>Notes</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <h2>Manifest</h2>
+        <p>Upload and verify daily manifests here.</p>
       </div>
     </section>
-
   </main>
+
+  <footer class="footer">
+    © 2025 Detroit Axle Receiving Portal — RRPD Division
+  </footer>
+
+  <script src="script.js"></script>
 </body>
 </html>
