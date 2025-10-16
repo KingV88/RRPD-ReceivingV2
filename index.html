@@ -1,77 +1,155 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RRPD Receiving Dashboard</title>
-
-  <!-- Styles -->
-  <link rel="stylesheet" href="style.css" />
-
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-  <!-- Main Script -->
-  <script src="script.js" defer></script>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RRPD Receiving</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-
 <body>
-  <header>
-    <img src="detroit-axle-logo.png" alt="Detroit Axle Logo" class="logo" />
-    <h1>RRPD Receiving Dashboard</h1>
-    <nav>
-      <button class="tab active" data-tab="dashboard">Dashboard</button>
-      <button class="tab" data-tab="scanners">Scanners</button>
-      <button class="tab" data-tab="classifications">Classifications</button>
-      <button class="tab" data-tab="trend">Monthly Trend</button>
-      <button class="tab" data-tab="miss">Miss Inspections</button>
-      <button class="tab" data-tab="manual">Manual Add</button>
-    </nav>
-  </header>
+<header class="topbar">
+  <div class="brand">RRPD Receiving</div>
+  <div class="status"><span id="status">Loading…</span> <button id="refreshBtn" class="btn">Refresh</button></div>
+</header>
 
-  <main>
-    <div id="loading" class="loading">Fetching data...</div>
+<nav class="tabs">
+  <button class="tab active" data-panel="dashboard">Dashboard</button>
+  <button class="tab" data-panel="scanners">Scanners</button>
+  <button class="tab" data-panel="classifications">Classifications</button>
+  <button class="tab" data-panel="carriers">Carriers</button>
+  <button class="tab" data-panel="racks">Racks</button>
+  <button class="tab" data-panel="miss">Miss Inspections</button>
+</nav>
 
-    <section id="dashboard" class="panel active">
-      <h2>Overall Dashboard</h2>
-      <canvas id="overview_chart"></canvas>
-      <div id="totals_summary" class="data-table"></div>
-    </section>
+<main class="wrap">
+  <!-- DASHBOARD (weekly/daily quick view) -->
+  <section id="dashboard" class="panel active">
+    <div class="grid">
+      <div class="card">
+        <h3>Classifications (donut)</h3>
+        <canvas id="class_chart"></canvas>
+      </div>
+      <div class="card">
+        <h3>Scans by Scanner (bar)</h3>
+        <canvas id="scanner_chart"></canvas>
+      </div>
+    </div>
+  </section>
 
-    <section id="scanners" class="panel">
-      <h2>Scanners</h2>
-      <button id="refresh_btn" class="btn">⟳ Refresh</button>
-      <table id="scanner_totals" class="data-table"></table>
-      <canvas id="scanner_chart"></canvas>
-    </section>
+  <!-- SCANNERS -->
+  <section id="scanners" class="panel">
+    <div class="grid">
+      <div class="card">
+        <h3>All-Time (from API)</h3>
+        <canvas id="scanner_chart_full"></canvas>
+      </div>
+      <div class="card">
+        <h3>Today (local filter)</h3>
+        <canvas id="scanner_chart_today"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Totals</h3>
+      <table class="table" id="scanner_totals"><tr><td>—</td></tr></table>
+    </div>
+  </section>
 
-    <section id="classifications" class="panel">
-      <h2>Classifications</h2>
-      <table id="class_table" class="data-table"></table>
-      <canvas id="class_chart"></canvas>
-    </section>
+  <!-- CLASSIFICATIONS -->
+  <section id="classifications" class="panel">
+    <div class="grid">
+      <div class="card"><h3>Classifications Donut</h3><canvas id="class_chart_full"></canvas></div>
+      <div class="card">
+        <h3>Breakdown</h3>
+        <table class="table" id="class_table"><tr><td>—</td></tr></table>
+      </div>
+    </div>
+  </section>
 
-    <section id="trend" class="panel">
-      <h2>Monthly Trend</h2>
-      <canvas id="trend_chart"></canvas>
-    </section>
+  <!-- CARRIERS (manual) -->
+  <section id="carriers" class="panel">
+    <div class="card">
+      <h3>Add Daily Carriers</h3>
+      <div class="form">
+        <input id="ca_date" type="date">
+        <input id="ca_fedex" type="number" placeholder="FedEx">
+        <input id="ca_ups" type="number" placeholder="UPS">
+        <input id="ca_usps" type="number" placeholder="USPS">
+        <input id="ca_other" type="number" placeholder="Other">
+        <button id="ca_save" class="btn">Save</button>
+        <button id="ca_reset" class="btn alt">Reset All</button>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Today</h3><canvas id="carrier_donut_today"></canvas></div>
+      <div class="card"><h3>This Week</h3><canvas id="carrier_bars_week"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Log</h3>
+      <table class="table" id="carrier_log"><tr><td>—</td></tr></table>
+    </div>
+  </section>
 
-    <section id="miss" class="panel">
-      <h2>Miss Inspections</h2>
-      <table id="miss_table" class="data-table"></table>
-    </section>
+  <!-- RACKS (manual) -->
+  <section id="racks" class="panel">
+    <div class="card">
+      <h3>Add Daily Racks / Axles / DS / GB</h3>
+      <div class="form">
+        <input id="ra_date" type="date">
+        <input id="ra_racks_good" type="number" placeholder="Racks Good">
+        <input id="ra_racks_core" type="number" placeholder="Racks Core">
+        <input id="ra_eracks_good" type="number" placeholder="E-Racks Good">
+        <input id="ra_eracks_core" type="number" placeholder="E-Racks Core">
+        <input id="ra_ax_good" type="number" placeholder="Axles Good">
+        <input id="ra_ax_used" type="number" placeholder="Axles Used">
+        <input id="ra_ds_good" type="number" placeholder="Drive Shafts Good">
+        <input id="ra_ds_used" type="number" placeholder="Drive Shafts Used">
+        <input id="ra_gb_good" type="number" placeholder="Gearboxes Good">
+        <input id="ra_gb_used" type="number" placeholder="Gearboxes Used">
+        <button id="ra_save" class="btn">Save</button>
+        <button id="ra_reset" class="btn alt">Reset All</button>
+      </div>
+    </div>
 
-    <section id="manual" class="panel">
-      <h2>Manual Add (Admin)</h2>
-      <input id="manual_name" type="text" placeholder="Scanner name" />
-      <input id="manual_val" type="number" placeholder="Amount" />
-      <button id="manual_add_btn" class="btn">Add</button>
-      <p>Last updated: <span id="last_update">—</span></p>
-    </section>
-  </main>
+    <div class="grid">
+      <div class="card"><h3>Racks</h3><canvas id="ra_donut_racks"></canvas></div>
+      <div class="card"><h3>E-Racks</h3><canvas id="ra_donut_eracks"></canvas></div>
+      <div class="card"><h3>Axles</h3><canvas id="ra_donut_axles"></canvas></div>
+      <div class="card"><h3>Drive Shafts</h3><canvas id="ra_donut_ds"></canvas></div>
+      <div class="card"><h3>Gearboxes</h3><canvas id="ra_donut_gb"></canvas></div>
+    </div>
 
-  <footer>
-    <p>© 2025 RRPD Receiving Dashboard | Powered by Detroit Axle Data</p>
-  </footer>
+    <div class="card">
+      <h3>Week at a Glance</h3>
+      <canvas id="ra_week_bars"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>Log</h3>
+      <table class="table" id="racks_log"><tr><td>—</td></tr></table>
+    </div>
+  </section>
+
+  <!-- MISS INSPECTIONS -->
+  <section id="miss" class="panel">
+    <div class="card">
+      <h3>Add Miss Inspection</h3>
+      <div class="form">
+        <input id="mi_date" type="date">
+        <input id="mi_scanner" type="text" placeholder="Scanner name">
+        <input id="mi_tracking" type="text" placeholder="Tracking number">
+        <input id="mi_reason" type="text" placeholder="Reason (manual)">
+        <button id="mi_save" class="btn">Save</button>
+        <button id="mi_reset" class="btn alt">Reset All</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Miss Log</h3>
+      <table class="table" id="miss_log"><tr><td>—</td></tr></table>
+    </div>
+  </section>
+</main>
+
+<script src="script.js"></script>
 </body>
 </html>
