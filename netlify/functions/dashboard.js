@@ -1,33 +1,34 @@
 // /.netlify/functions/dashboard.js
-import fetch from "node-fetch";
 
 export const handler = async () => {
   try {
-    const res = await fetch("https://returns.detroitaxle.com/api/returns");
+    const API = "https://returns.detroitaxle.com/api/returns";
+    const res = await fetch(API);
+    if (!res.ok) throw new Error(`Upstream ${res.status}`);
     const data = await res.json();
 
-    // Transform API into simplified dashboard summary
+    // --- Data summaries ---
     const scanners = {};
     const classifications = {};
     const daily = {};
     const weekly = {};
 
     data.forEach((item) => {
-      const user = item.scanner_name || "Unknown";
-      scanners[user] = (scanners[user] || 0) + 1;
+      const who = item.scanner_name || "Unknown";
+      scanners[who] = (scanners[who] || 0) + 1;
 
       const cls = item.classification || "Unclassified";
       classifications[cls] = (classifications[cls] || 0) + 1;
 
-      const date = item.date?.slice(0, 10);
+      const date = item.date?.slice(0, 10) || "Unknown";
       daily[date] = (daily[date] || 0) + 1;
     });
 
-    // Weekly grouping (simple aggregate)
-    const weekKeys = Object.keys(daily);
-    weekKeys.forEach((d, i) => {
-      const week = `Week ${Math.floor(i / 7) + 1}`;
-      weekly[week] = (weekly[week] || 0) + daily[d];
+    // --- Weekly totals ---
+    const dates = Object.keys(daily);
+    dates.forEach((d, i) => {
+      const w = `Week ${Math.floor(i / 7) + 1}`;
+      weekly[w] = (weekly[w] || 0) + daily[d];
     });
 
     return {
@@ -52,8 +53,9 @@ export const handler = async () => {
   } catch (err) {
     console.error("Dashboard API error:", err);
     return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Failed to load API" }),
+      statusCode: 502,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({ error: err.message }),
     };
   }
 };
