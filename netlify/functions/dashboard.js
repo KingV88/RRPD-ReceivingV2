@@ -1,42 +1,34 @@
-// /.netlify/functions/dashboard.js
-
 export const handler = async () => {
   try {
     const API = "https://returns.detroitaxle.com/api/returns";
     const res = await fetch(API);
-    if (!res.ok) throw new Error(`Upstream ${res.status}`);
     const data = await res.json();
 
-    // --- Data summaries ---
     const scanners = {};
     const classifications = {};
     const daily = {};
     const weekly = {};
 
     data.forEach((item) => {
-      const who = item.scanner_name || "Unknown";
-      scanners[who] = (scanners[who] || 0) + 1;
+      const user = item.scanner_name || "Unknown";
+      scanners[user] = (scanners[user] || 0) + 1;
 
       const cls = item.classification || "Unclassified";
       classifications[cls] = (classifications[cls] || 0) + 1;
 
-      const date = item.date?.slice(0, 10) || "Unknown";
+      const date = item.date?.slice(0, 10);
       daily[date] = (daily[date] || 0) + 1;
     });
 
-    // --- Weekly totals ---
-    const dates = Object.keys(daily);
-    dates.forEach((d, i) => {
-      const w = `Week ${Math.floor(i / 7) + 1}`;
-      weekly[w] = (weekly[w] || 0) + daily[d];
+    const days = Object.keys(daily);
+    days.forEach((_, i) => {
+      const week = `Week ${Math.floor(i / 7) + 1}`;
+      weekly[week] = (weekly[week] || 0) + daily[days[i]];
     });
 
     return {
       statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json",
-      },
+      headers: { "Access-Control-Allow-Origin": "*" },
       body: JSON.stringify({
         scanners,
         classifications,
@@ -51,7 +43,7 @@ export const handler = async () => {
       }),
     };
   } catch (err) {
-    console.error("Dashboard API error:", err);
+    console.error("API Error:", err);
     return {
       statusCode: 502,
       headers: { "Access-Control-Allow-Origin": "*" },
