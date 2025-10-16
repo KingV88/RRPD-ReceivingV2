@@ -1,195 +1,121 @@
-/* === RRPD Receiving Dashboard — Detroit Axle Polished Style === */
-
-/* Global Reset */
+/* General */
 body {
+  background: #0a1a2f;
+  color: #fff;
+  font-family: "Segoe UI", sans-serif;
   margin: 0;
-  font-family: "Segoe UI", Roboto, Arial, sans-serif;
-  background: radial-gradient(circle at top, #003366, #001a33);
-  color: #e6f0ff;
-  overflow-x: hidden;
+  padding: 0;
+  text-align: center;
 }
 
-/* Header */
-.header {
-  background: linear-gradient(90deg, #004b97, #0074cc);
-  color: #fff;
-  padding: 15px 20px;
-  text-align: center;
+header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 2px solid #00b3ff;
+  background: #002b5c;
+  padding: 10px 20px;
+  color: #fff;
 }
 
-.header .brand {
-  font-size: 22px;
-  font-weight: 600;
+.header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
-.logo {
-  height: 40px;
-  border-radius: 4px;
+#logo {
+  height: 45px;
+  margin-right: 10px;
 }
 
-.status {
-  font-size: 14px;
-  opacity: 0.85;
-}
-
-/* Navigation Bar */
-.nav-tabs {
+nav {
   display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  background: #002b55;
-  border-bottom: 2px solid #004c99;
-  padding: 8px 0;
+  justify-content: space-around;
+  background: #003366;
+  padding: 10px 0;
+  border-top: 2px solid #0066cc;
+  border-bottom: 2px solid #0066cc;
 }
 
-.nav-tabs button {
-  background: transparent;
+nav button {
+  flex: 1;
+  background: #004080;
   border: none;
-  color: #cce6ff;
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 8px;
-  padding: 10px 16px;
+  color: white;
+  padding: 10px;
   cursor: pointer;
-  border-radius: 5px;
-  transition: all 0.2s ease;
+  font-weight: bold;
+  font-size: 15px;
+  transition: background 0.3s ease;
 }
 
-.nav-tabs button:hover {
-  background: #004c99;
-  color: #fff;
+nav button:hover {
+  background: #0073e6;
 }
 
-.nav-tabs button.active {
-  background: #007bff;
-  color: #fff;
-  box-shadow: 0 0 8px rgba(0, 123, 255, 0.5);
-}
-
-/* Content */
-.content {
-  padding: 20px;
-  max-width: 1200px;
-  margin: auto;
-}
-
-.tab-content {
+section {
   display: none;
-  animation: fadeIn 0.3s ease;
+  padding: 20px;
 }
 
-.tab-content.active {
+section.active {
   display: block;
 }
 
-/* Cards */
-.card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-  padding: 16px 20px;
-  margin: 15px 0;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
-}
-
-.card h2 {
-  color: #66ccff;
-  font-size: 18px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 4px;
-}
-
-/* Grid Layout */
-.grid.two {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-@media (max-width: 900px) {
-  .grid.two {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Buttons */
-.btn {
-  background: #007bff;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn:hover {
-  background: #005fcc;
-}
-
-/* Forms */
-.form {
-  margin-bottom: 10px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-input {
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  padding: 6px 10px;
-  color: #fff;
-  flex: 1;
-  min-width: 120px;
-}
-
-input::placeholder {
-  color: #ccc;
+/* Charts */
+.chart-container {
+  position: relative;
+  margin: 20px auto;
+  height: 350px;
+  width: 85%;
+  background: #112244;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 0 10px #00000055;
 }
 
 /* Tables */
-.data-table {
-  width: 100%;
+table {
+  width: 85%;
+  margin: 10px auto;
   border-collapse: collapse;
+  background: #0f1f3d;
   color: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th, td {
+  border: 1px solid #ffffff40;
+  padding: 8px 12px;
+}
+
+th {
+  background: #003366;
+}
+
+/* Manual Panel */
+.manual-panel input, .manual-panel button {
+  margin: 5px;
+  padding: 8px;
+  border-radius: 4px;
+  border: none;
   font-size: 14px;
 }
 
-.data-table th,
-.data-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  text-align: left;
+.manual-panel button {
+  background: #0099ff;
+  color: #fff;
+  font-weight: bold;
 }
 
-/* Charts */
-canvas {
-  max-width: 100%;
-  max-height: 320px;
-  margin-top: 10px;
+.manual-panel button:hover {
+  background: #00bfff;
 }
 
-/* Footer */
-.footer {
-  text-align: center;
-  font-size: 13px;
-  color: #a3c8ff;
-  margin: 30px 0 15px 0;
-}
-
-/* Animation */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+footer {
+  background: #002b5c;
+  color: #ddd;
+  padding: 10px;
+  font-size: 14px;
+  border-top: 1px solid #004080;
 }
