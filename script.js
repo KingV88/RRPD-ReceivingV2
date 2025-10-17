@@ -1,9 +1,8 @@
-const API = "https://rrpd.netlify.app/.netlify/functions/dashboard";
 console.log("RRPD Dashboard Script Loaded");
 
-const API = "/.netlify/functions/dashboard";
-const statusEl = document.getElementById("status");
+const API = "/.netlify/functions/dashboard";  // Correct path for Netlify function
 const refreshBtn = document.getElementById("refresh_btn");
+let chartsDiv = document.getElementById("chartsDiv");
 let charts = {};
 
 async function fetchDashboard() {
