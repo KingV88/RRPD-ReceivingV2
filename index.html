@@ -4,67 +4,89 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RRPD Receiving Dashboard</title>
-  <link rel="stylesheet" href="style.css" />
+
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header>
-    <div class="header-left">
-      <img src="logo.png" alt="Detroit Axle Logo" id="logo" />
+    <div class="logo-area">
+      <img id="site_logo" src="./logo.png" alt="RRPD Logo" />
       <h1>RRPD Receiving Dashboard</h1>
     </div>
-    <div class="header-right">
-      <button id="refresh_btn">🔄 Refresh</button>
-      <p id="status">Waiting for data...</p>
+    <div class="status-area">
+      <span id="status">Loading...</span>
+      <button id="refresh_btn" class="btn refresh">🔄 Refresh</button>
     </div>
   </header>
 
   <nav>
-    <button data-target="dashboard">Dashboard</button>
+    <button data-target="dashboard" class="active">Dashboard</button>
     <button data-target="scanners">Scanners</button>
-    <button data-target="carriers">Classifications</button>
-    <button data-target="racks">Manual Entry</button>
+    <button data-target="classifications">Classifications</button>
+    <button data-target="manual">Manual Entry</button>
   </nav>
 
-  <main>
-    <!-- Dashboard -->
+  <main id="chartsDiv">
+    <!-- DASHBOARD -->
     <section id="dashboard" class="active">
-      <h2>Overall Trends</h2>
-      <div class="chart-container"><canvas id="trend_chart"></canvas></div>
-      <div class="chart-container"><canvas id="weekly_chart"></canvas></div>
+      <div class="panel">
+        <h2>Overall Trends</h2>
+        <div class="chart-box">
+          <canvas id="trend_chart"></canvas>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Weekly Totals</h2>
+        <div class="chart-box">
+          <canvas id="weekly_chart"></canvas>
+        </div>
+      </div>
     </section>
 
-    <!-- Scanners -->
+    <!-- SCANNERS -->
     <section id="scanners">
-      <h2>Scanner Totals</h2>
-      <div class="chart-container"><canvas id="scanner_chart"></canvas></div>
-      <table id="scanner_totals"></table>
+      <div class="panel">
+        <h2>Scans by User</h2>
+        <div class="chart-box">
+          <canvas id="scanner_chart"></canvas>
+        </div>
+        <table id="scanner_totals"></table>
+      </div>
     </section>
 
-    <!-- Classifications -->
-    <section id="carriers">
-      <h2>Classification Totals</h2>
-      <div class="chart-container"><canvas id="class_chart"></canvas></div>
-      <table id="class_table"></table>
+    <!-- CLASSIFICATIONS -->
+    <section id="classifications">
+      <div class="panel">
+        <h2>Classification Mix</h2>
+        <div class="chart-box">
+          <canvas id="class_chart"></canvas>
+        </div>
+        <table id="class_table"></table>
+      </div>
     </section>
 
-    <!-- Manual Entry -->
-    <section id="racks">
-      <h2>Manual Entry</h2>
-      <div class="manual-panel">
-        <input id="rack_name" placeholder="Item Name" />
-        <input id="rack_val" placeholder="Count" type="number" />
-        <button id="rack_add">Add</button>
-        <button id="rack_reset">Reset</button>
-        <table id="rack_table"><tr><th>Name</th><th>Count</th></tr></table>
+    <!-- MANUAL ENTRY -->
+    <section id="manual">
+      <div class="panel">
+        <h2>Racks (Manual Entry)</h2>
+        <div class="manual-form">
+          <input id="rack_name" placeholder="Rack / Bay" />
+          <input id="rack_val" placeholder="Count" type="number" />
+          <button id="rack_add" class="btn add">Add</button>
+          <button id="rack_reset" class="btn reset">Reset</button>
+        </div>
+        <table id="rack_table">
+          <tr><th>Rack</th><th>Count</th></tr>
+        </table>
       </div>
     </section>
   </main>
 
-  <footer>
-    <p>© 2025 Detroit Axle Returns Processing Division</p>
-  </footer>
-
+  <!-- JS -->
   <script src="script.js"></script>
 </body>
 </html>
