@@ -2,91 +2,192 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>RRPD Receiving Dashboard</title>
 
   <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
-  <!-- Styles -->
-  <link rel="stylesheet" href="style.css" />
+  <!-- PDF.js for manifest parsing (client-side) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+  </script>
+
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
   <header>
-    <div class="logo-area">
-      <img id="site_logo" src="./logo.png" alt="RRPD Logo" />
+    <div class="logo-title">
+      <!-- Drop your own logo.png in the site root -->
+      <img src="logo.png" alt="Detroit Axle" class="logo" onerror="this.style.display='none'"/>
       <h1>RRPD Receiving Dashboard</h1>
     </div>
-    <div class="status-area">
-      <span id="status">Loading...</span>
-      <button id="refresh_btn" class="btn refresh">🔄 Refresh</button>
-    </div>
+    <nav>
+      <button data-target="dashboard" class="active">Dashboard</button>
+      <button data-target="scanners">Scanners</button>
+      <button data-target="classifications">Classifications</button>
+      <button data-target="racks">Racks</button>
+      <button data-target="carriers">Carriers</button>
+      <button data-target="miss">Miss Inspections</button>
+    </nav>
   </header>
 
-  <nav>
-    <button data-target="dashboard" class="active">Dashboard</button>
-    <button data-target="scanners">Scanners</button>
-    <button data-target="classifications">Classifications</button>
-    <button data-target="manual">Manual Entry</button>
-  </nav>
-
-  <main id="chartsDiv">
+  <main>
     <!-- DASHBOARD -->
     <section id="dashboard" class="active">
-      <div class="panel">
-        <h2>Overall Trends</h2>
-        <div class="chart-box">
-          <canvas id="trend_chart"></canvas>
+      <div class="panel-head">
+        <h2>Overview</h2>
+        <div class="inline-actions">
+          <label class="manifest-upload">
+            <input type="file" id="manifest_pdf" accept="application/pdf"/>
+            📄 Upload FedEx Manifest (PDF)
+          </label>
+          <button id="refresh_btn">🔄 Refresh Data</button>
         </div>
       </div>
-      <div class="panel">
-        <h2>Weekly Totals</h2>
-        <div class="chart-box">
+
+      <div class="cards-2">
+        <div class="card">
+          <h3>Daily Totals</h3>
+          <canvas id="trend_chart"></canvas>
+        </div>
+        <div class="card">
+          <h3>Weekly Totals</h3>
           <canvas id="weekly_chart"></canvas>
         </div>
+      </div>
+
+      <div class="cards-2">
+        <div class="card">
+          <h3>Manifest Today: Scanned vs Missing</h3>
+          <canvas id="manifest_today_donut"></canvas>
+          <div id="manifest_today_meta" class="small"></div>
+        </div>
+        <div class="card">
+          <h3>Manifest Weekly Trend</h3>
+          <canvas id="manifest_week_line"></canvas>
+        </div>
+      </div>
+
+      <div id="status" class="status">Fetching data…</div>
+      <div id="manifest_missing_wrap" class="card" style="display:none">
+        <h3>Missing From Manifest (Today)</h3>
+        <table id="manifest_missing_table">
+          <tr><th>#</th><th>Tracking</th></tr>
+        </table>
       </div>
     </section>
 
     <!-- SCANNERS -->
     <section id="scanners">
-      <div class="panel">
-        <h2>Scans by User</h2>
-        <div class="chart-box">
+      <h2>Scanner Performance</h2>
+      <div class="cards-2">
+        <div class="card">
+          <h3>Scans by User (Today)</h3>
           <canvas id="scanner_chart"></canvas>
         </div>
-        <table id="scanner_totals"></table>
+        <div class="card">
+          <h3>All-Time (from API)</h3>
+          <canvas id="scanner_alltime_chart"></canvas>
+        </div>
       </div>
+      <table id="scanner_totals"></table>
     </section>
 
     <!-- CLASSIFICATIONS -->
     <section id="classifications">
-      <div class="panel">
-        <h2>Classification Mix</h2>
-        <div class="chart-box">
+      <h2>Part Classifications</h2>
+      <div class="cards-2">
+        <div class="card">
+          <h3>Breakdown (Donut)</h3>
+          <canvas id="class_donut"></canvas>
+        </div>
+        <div class="card">
+          <h3>Counts (Bar)</h3>
           <canvas id="class_chart"></canvas>
         </div>
-        <table id="class_table"></table>
+      </div>
+      <table id="class_table"></table>
+    </section>
+
+    <!-- RACKS (manual) -->
+    <section id="racks">
+      <h2>Racks</h2>
+      <div class="cards-2">
+        <div class="card">
+          <h3>Quick Entry</h3>
+          <div class="row">
+            <select id="rack_type">
+              <option value="Racks_Good">Racks (Good)</option>
+              <option value="Racks_Core">Racks (Core)</option>
+              <option value="ERacks_Good">E-Racks (Good)</option>
+              <option value="ERacks_Core">E-Racks (Core)</option>
+              <option value="Axles_Good">Axles (Good)</option>
+              <option value="Axles_Used">Axles (Used)</option>
+              <option value="DriveShafts_Good">Drive Shafts (Good)</option>
+              <option value="DriveShafts_Used">Drive Shafts (Used)</option>
+              <option value="Gearboxes_Good">Gearboxes (Good)</option>
+              <option value="Gearboxes_Used">Gearboxes (Used)</option>
+            </select>
+            <input id="rack_val" type="number" placeholder="Count"/>
+            <button id="rack_add">Add</button>
+            <button id="rack_reset" class="warn">Reset Day</button>
+          </div>
+          <table id="rack_table">
+            <tr><th>Type</th><th>Count</th></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Comparisons</h3>
+          <canvas id="racks_donut"></canvas>
+        </div>
       </div>
     </section>
 
-    <!-- MANUAL ENTRY -->
-    <section id="manual">
-      <div class="panel">
-        <h2>Racks (Manual Entry)</h2>
-        <div class="manual-form">
-          <input id="rack_name" placeholder="Rack / Bay" />
-          <input id="rack_val" placeholder="Count" type="number" />
-          <button id="rack_add" class="btn add">Add</button>
-          <button id="rack_reset" class="btn reset">Reset</button>
+    <!-- CARRIERS (manual) -->
+    <section id="carriers">
+      <h2>Carriers</h2>
+      <div class="cards-2">
+        <div class="card">
+          <h3>Quick Entry (Today)</h3>
+          <div class="row">
+            <select id="carrier_name">
+              <option>FedEx</option>
+              <option>UPS</option>
+              <option>USPS</option>
+              <option>Other</option>
+            </select>
+            <input id="carrier_val" type="number" placeholder="Packages"/>
+            <button id="carrier_add">Add</button>
+            <button id="carrier_reset" class="warn">Reset Day</button>
+          </div>
+          <table id="carrier_table">
+            <tr><th>Carrier</th><th>Packages</th></tr>
+          </table>
         </div>
-        <table id="rack_table">
-          <tr><th>Rack</th><th>Count</th></tr>
-        </table>
+        <div class="card">
+          <h3>Today’s Share (Donut)</h3>
+          <canvas id="carrier_donut"></canvas>
+        </div>
       </div>
+    </section>
+
+    <!-- MISS INSPECTIONS -->
+    <section id="miss">
+      <h2>Missed Inspections</h2>
+      <div class="row">
+        <input id="miss_search" type="text" placeholder="Enter Tracking #"/>
+        <button id="miss_lookup">Lookup</button>
+      </div>
+      <div id="miss_result" class="card"></div>
     </section>
   </main>
 
-  <!-- JS -->
+  <footer>
+    <p>Detroit Axle © 2025 | RRPD Receiving</p>
+  </footer>
+
   <script src="script.js"></script>
 </body>
 </html>
