@@ -1,191 +1,107 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RRPD Receiving Dashboard</title>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
-  <!-- PDF.js for manifest parsing (client-side) -->
+  <!-- PDF.js (must load before script.js) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
   </script>
 
-  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <div class="logo-title">
-      <!-- Drop your own logo.png in the site root -->
-      <img src="logo.png" alt="Detroit Axle" class="logo" onerror="this.style.display='none'"/>
-      <h1>RRPD Receiving Dashboard</h1>
-    </div>
-    <nav>
-      <button data-target="dashboard" class="active">Dashboard</button>
-      <button data-target="scanners">Scanners</button>
-      <button data-target="classifications">Classifications</button>
-      <button data-target="racks">Racks</button>
-      <button data-target="carriers">Carriers</button>
-      <button data-target="miss">Miss Inspections</button>
-    </nav>
+    <img src="detroit-axle-logo.png" alt="Detroit Axle" class="logo" onerror="this.style.display='none'">
+    <h1>RRPD Receiving Dashboard</h1>
+    <button id="refresh_btn">🔄 Refresh Data</button>
   </header>
 
-  <main>
-    <!-- DASHBOARD -->
-    <section id="dashboard" class="active">
-      <div class="panel-head">
-        <h2>Overview</h2>
-        <div class="inline-actions">
-          <label class="manifest-upload">
-            <input type="file" id="manifest_pdf" accept="application/pdf"/>
-            📄 Upload FedEx Manifest (PDF)
-          </label>
-          <button id="refresh_btn">🔄 Refresh Data</button>
-        </div>
-      </div>
+  <!-- Diagnostic Banner -->
+  <div id="diagnostic-banner" style="
+    display:none;
+    background:#b91c1c;
+    color:#fff;
+    text-align:center;
+    font-weight:600;
+    padding:10px;
+    letter-spacing:.3px;">
+    ⚠️ Dashboard Notice: One or more scripts failed to load. Check connection or refresh.
+  </div>
 
-      <div class="cards-2">
-        <div class="card">
-          <h3>Daily Totals</h3>
-          <canvas id="trend_chart"></canvas>
-        </div>
-        <div class="card">
-          <h3>Weekly Totals</h3>
-          <canvas id="weekly_chart"></canvas>
-        </div>
-      </div>
+  <nav>
+    <button data-target="dashboard" class="active">Dashboard</button>
+    <button data-target="scanners">Scanners</button>
+    <button data-target="classifications">Classifications</button>
+    <button data-target="manual">Manual Entry</button>
+    <button data-target="manifest">Manifest</button>
+  </nav>
 
-      <div class="cards-2">
-        <div class="card">
-          <h3>Manifest Today: Scanned vs Missing</h3>
-          <canvas id="manifest_today_donut"></canvas>
-          <div id="manifest_today_meta" class="small"></div>
-        </div>
-        <div class="card">
-          <h3>Manifest Weekly Trend</h3>
-          <canvas id="manifest_week_line"></canvas>
-        </div>
-      </div>
+  <!-- Dashboard -->
+  <section id="dashboard" class="active">
+    <div class="panel">
+      <h2>Overall Trends</h2>
+      <canvas id="trend_chart"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Weekly Totals</h2>
+      <canvas id="weekly_chart"></canvas>
+    </div>
+  </section>
 
-      <div id="status" class="status">Fetching data…</div>
-      <div id="manifest_missing_wrap" class="card" style="display:none">
-        <h3>Missing From Manifest (Today)</h3>
-        <table id="manifest_missing_table">
-          <tr><th>#</th><th>Tracking</th></tr>
-        </table>
-      </div>
-    </section>
-
-    <!-- SCANNERS -->
-    <section id="scanners">
-      <h2>Scanner Performance</h2>
-      <div class="cards-2">
-        <div class="card">
-          <h3>Scans by User (Today)</h3>
-          <canvas id="scanner_chart"></canvas>
-        </div>
-        <div class="card">
-          <h3>All-Time (from API)</h3>
-          <canvas id="scanner_alltime_chart"></canvas>
-        </div>
-      </div>
+  <!-- Scanners -->
+  <section id="scanners">
+    <div class="panel">
+      <h2>Scans by User</h2>
+      <canvas id="scanner_chart"></canvas>
       <table id="scanner_totals"></table>
-    </section>
+    </div>
+  </section>
 
-    <!-- CLASSIFICATIONS -->
-    <section id="classifications">
-      <h2>Part Classifications</h2>
-      <div class="cards-2">
-        <div class="card">
-          <h3>Breakdown (Donut)</h3>
-          <canvas id="class_donut"></canvas>
-        </div>
-        <div class="card">
-          <h3>Counts (Bar)</h3>
-          <canvas id="class_chart"></canvas>
-        </div>
-      </div>
+  <!-- Classifications -->
+  <section id="classifications">
+    <div class="panel">
+      <h2>Classification Mix</h2>
+      <canvas id="class_chart"></canvas>
       <table id="class_table"></table>
-    </section>
+    </div>
+  </section>
 
-    <!-- RACKS (manual) -->
-    <section id="racks">
-      <h2>Racks</h2>
-      <div class="cards-2">
-        <div class="card">
-          <h3>Quick Entry</h3>
-          <div class="row">
-            <select id="rack_type">
-              <option value="Racks_Good">Racks (Good)</option>
-              <option value="Racks_Core">Racks (Core)</option>
-              <option value="ERacks_Good">E-Racks (Good)</option>
-              <option value="ERacks_Core">E-Racks (Core)</option>
-              <option value="Axles_Good">Axles (Good)</option>
-              <option value="Axles_Used">Axles (Used)</option>
-              <option value="DriveShafts_Good">Drive Shafts (Good)</option>
-              <option value="DriveShafts_Used">Drive Shafts (Used)</option>
-              <option value="Gearboxes_Good">Gearboxes (Good)</option>
-              <option value="Gearboxes_Used">Gearboxes (Used)</option>
-            </select>
-            <input id="rack_val" type="number" placeholder="Count"/>
-            <button id="rack_add">Add</button>
-            <button id="rack_reset" class="warn">Reset Day</button>
-          </div>
-          <table id="rack_table">
-            <tr><th>Type</th><th>Count</th></tr>
-          </table>
-        </div>
-        <div class="card">
-          <h3>Comparisons</h3>
-          <canvas id="racks_donut"></canvas>
-        </div>
-      </div>
-    </section>
+  <!-- Manual Entry -->
+  <section id="manual">
+    <div class="panel">
+      <h2>Manual Rack Entry</h2>
+      <input type="text" id="rack_name" placeholder="Rack / Bay">
+      <input type="number" id="rack_val" placeholder="Count">
+      <button id="rack_add">Add</button>
+      <button id="rack_reset">Reset</button>
+      <table id="rack_table">
+        <tr><th>Name</th><th>Count</th></tr>
+      </table>
+    </div>
+  </section>
 
-    <!-- CARRIERS (manual) -->
-    <section id="carriers">
-      <h2>Carriers</h2>
-      <div class="cards-2">
-        <div class="card">
-          <h3>Quick Entry (Today)</h3>
-          <div class="row">
-            <select id="carrier_name">
-              <option>FedEx</option>
-              <option>UPS</option>
-              <option>USPS</option>
-              <option>Other</option>
-            </select>
-            <input id="carrier_val" type="number" placeholder="Packages"/>
-            <button id="carrier_add">Add</button>
-            <button id="carrier_reset" class="warn">Reset Day</button>
-          </div>
-          <table id="carrier_table">
-            <tr><th>Carrier</th><th>Packages</th></tr>
-          </table>
-        </div>
-        <div class="card">
-          <h3>Today’s Share (Donut)</h3>
-          <canvas id="carrier_donut"></canvas>
-        </div>
-      </div>
-    </section>
-
-    <!-- MISS INSPECTIONS -->
-    <section id="miss">
-      <h2>Missed Inspections</h2>
-      <div class="row">
-        <input id="miss_search" type="text" placeholder="Enter Tracking #"/>
-        <button id="miss_lookup">Lookup</button>
-      </div>
-      <div id="miss_result" class="card"></div>
-    </section>
-  </main>
+  <!-- Manifest PDF Reader -->
+  <section id="manifest">
+    <div class="panel">
+      <h2>Manifest (PDF) Upload</h2>
+      <input type="file" id="pdfUpload" accept="application/pdf" multiple>
+      <p id="pdfStatus">No manifests uploaded.</p>
+      <table id="pdfTable">
+        <tr><th>File</th><th>Pages</th><th>Items Detected</th></tr>
+      </table>
+    </div>
+  </section>
 
   <footer>
-    <p>Detroit Axle © 2025 | RRPD Receiving</p>
+    <p id="status">Loading data...</p>
   </footer>
 
   <script src="script.js"></script>
