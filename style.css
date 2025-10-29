@@ -75,3 +75,12 @@ th{background:#153060;color:var(--brand)}
 .small{color:var(--muted);font-size:.9rem}
 .status{margin-top:10px;color:var(--muted)}
 footer{margin:40px 0 20px;color:#88a4cf;text-align:center}
+#pdfUpload {
+  display: block;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+#pdfTable tr:nth-child(odd) {
+  background: #112a50;
+}
