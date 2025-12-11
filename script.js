@@ -1,164 +1,207 @@
-console.log("RRPD Dashboard Script Loaded");
+console.log("RRPD final script loaded");
 
 const API = "/.netlify/functions/dashboard";
+
+const statusEl = document.getElementById("status_text");
+const updatedSmall = document.getElementById("updated_small");
 const refreshBtn = document.getElementById("refresh_btn");
-const statusEl = document.getElementById("status");
+
 let charts = {};
 
-// ===== Diagnostic Banner =====
-function showDiag(msg) {
-  const el = document.getElementById("diagnostic-banner");
-  if (el) {
-    el.style.display = "block";
-    el.textContent = `⚠️ ${msg}`;
-  }
+function makeChart(id, type, labels, values, label) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  if (charts[id]) charts[id].destroy();
+
+  charts[id] = new Chart(canvas, {
+    type,
+    data: {
+      labels,
+      datasets: [
+        {
+          label,
+          data: values,
+          backgroundColor:
+            type === "doughnut"
+              ? [
+                  "#00bfff",
+                  "#36cfc9",
+                  "#ffd666",
+                  "#ff7875",
+                  "#9254de",
+                  "#5cdbd3"
+                ]
+              : "#00bfff",
+          borderColor: type === "doughnut" ? "#001529" : "#007acc",
+          borderWidth: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: { color: "#f5f8ff", font: { size: 11 } }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.label}: ${ctx.parsed}`
+          }
+        }
+      },
+      scales:
+        type === "doughnut"
+          ? {}
+          : {
+              x: { ticks: { color: "#f5f8ff" } },
+              y: {
+                beginAtZero: true,
+                ticks: { color: "#f5f8ff" }
+              }
+            }
+    }
+  });
 }
 
-window.addEventListener("load", () => {
-  if (typeof pdfjsLib === "undefined") {
-    showDiag("PDF module failed to load — Manifest upload unavailable.");
-  }
-});
+/* ---------- render helpers ---------- */
 
-// API Connectivity Test
-(async () => {
-  try {
-    const ping = await fetch(API);
-    if (!ping.ok) throw new Error(ping.status);
-  } catch (e) {
-    showDiag("API connection failed — using cached data only.");
-  }
-})();
+function renderDashboard(daily, weekly) {
+  const dayLabels = Object.keys(daily || {}).sort();
+  const dayValues = dayLabels.map(d => daily[d]);
 
-// ===== FETCH DATA =====
+  const weekLabels = Object.keys(weekly || {});
+  const weekValues = weekLabels.map(w => weekly[w]);
+
+  makeChart("chart_daily", "line", dayLabels, dayValues, "Daily Totals");
+  makeChart("chart_weekly", "bar", weekLabels, weekValues, "Weekly Totals");
+}
+
+function renderScanners(scanners) {
+  const labels = Object.keys(scanners || {});
+  const values = labels.map(k => scanners[k]);
+  makeChart("chart_scanners", "bar", labels, values, "Scans");
+
+  const tbody = document.querySelector("#table_scanners tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  labels
+    .map((name, i) => ({ name, count: values[i] }))
+    .sort((a, b) => b.count - a.count)
+    .forEach(row => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${row.name}</td><td>${row.count}</td>`;
+      tbody.appendChild(tr);
+    });
+}
+
+function renderClassifications(classifications) {
+  const labels = Object.keys(classifications || {});
+  const values = labels.map(k => classifications[k]);
+  makeChart("chart_class_pie", "doughnut", labels, values, "Counts");
+
+  const tbody = document.querySelector("#table_class tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  labels.forEach((cls, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${cls}</td><td>${values[i]}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ---------- manual local-only tables ---------- */
+
+function wireManualTable(nameInputId, valInputId, addBtnId, resetBtnId, tableId) {
+  const nameInput = document.getElementById(nameInputId);
+  const valInput = document.getElementById(valInputId);
+  const addBtn = document.getElementById(addBtnId);
+  const resetBtn = document.getElementById(resetBtnId);
+  const tbody = document.querySelector(`#${tableId} tbody`);
+
+  if (!nameInput || !valInput || !addBtn || !resetBtn || !tbody) return;
+
+  addBtn.addEventListener("click", () => {
+    const name = nameInput.value.trim();
+    const val = valInput.value.trim();
+    if (!name || !val) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${name}</td><td>${val}</td>`;
+    tbody.appendChild(tr);
+    nameInput.value = "";
+    valInput.value = "";
+  });
+
+  resetBtn.addEventListener("click", () => {
+    tbody.innerHTML = "";
+  });
+}
+
+/* ---------- tabs ---------- */
+
+function wireTabs() {
+  const tabButtons = document.querySelectorAll(".tab-btn");
+  const tabs = document.querySelectorAll(".tab");
+
+  tabButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.target;
+
+      tabButtons.forEach(b => b.classList.remove("active"));
+      tabs.forEach(t => t.classList.remove("active"));
+
+      btn.classList.add("active");
+      document.getElementById(target).classList.add("active");
+    });
+  });
+}
+
+/* ---------- fetch + init ---------- */
+
 async function fetchDashboard() {
   try {
+    statusEl.textContent = "Refreshing…";
     const res = await fetch(API);
     if (!res.ok) throw new Error(`Upstream ${res.status}`);
     const data = await res.json();
     console.log("Data fetched:", data);
-    renderAll(data);
-    statusEl.textContent = "Updated: " + new Date().toLocaleTimeString();
-  } catch (e) {
-    console.warn("API Fallback:", e.message);
-    statusEl.textContent = "API unavailable — local mode";
-    showDiag("Unable to fetch dashboard data.");
+
+    renderDashboard(data.daily || {}, data.weekly || {});
+    renderScanners(data.scanners || {});
+    renderClassifications(data.classifications || {});
+
+    const ts = data.updated ? new Date(data.updated) : new Date();
+    const pretty = ts.toLocaleString();
+    statusEl.textContent = `Updated: ${pretty}`;
+    if (updatedSmall) updatedSmall.textContent = `Last updated: ${pretty}`;
+  } catch (err) {
+    console.warn("API fallback:", err);
+    statusEl.textContent = "API unavailable — check logs";
   }
 }
 
-// ===== RENDER PANELS =====
-function renderAll(data) {
-  const scanners = data.scanners || {};
-  const classifications = data.classifications || {};
-  const weekly = data.weekly || {};
-  const totals = data.totals || {};
+function init() {
+  wireTabs();
 
-  renderChart("trend_chart", "Daily Totals", totals.labels || Object.keys(totals), totals.values || Object.values(totals));
-  renderChart("weekly_chart", "Weekly Totals", Object.keys(weekly), Object.values(weekly));
-  renderChart("scanner_chart", "Scans by User", Object.keys(scanners), Object.values(scanners));
-  renderChart("class_chart", "Classification Mix", Object.keys(classifications), Object.values(classifications));
+  wireManualTable(
+    "carrier_name",
+    "carrier_val",
+    "carrier_add",
+    "carrier_reset",
+    "table_carriers"
+  );
+  wireManualTable(
+    "rack_name",
+    "rack_val",
+    "rack_add",
+    "rack_reset",
+    "table_racks"
+  );
 
-  renderTable("scanner_totals", scanners);
-  renderTable("class_table", classifications);
+  if (refreshBtn) refreshBtn.addEventListener("click", fetchDashboard);
+
+  fetchDashboard();
+  setInterval(fetchDashboard, 2 * 60 * 1000); // every 2 minutes
 }
 
-function renderChart(id, label, labels, values) {
-  const ctx = document.getElementById(id);
-  if (!ctx) return;
-  if (charts[id]) charts[id].destroy();
-
-  charts[id] = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        label,
-        data: values,
-        backgroundColor: "#00bfff",
-        borderColor: "#007acc",
-        borderWidth: 1
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { labels: { color: "#fff" } } },
-      scales: {
-        x: { ticks: { color: "#fff" } },
-        y: { ticks: { color: "#fff" } }
-      }
-    }
-  });
-}
-
-function renderTable(id, obj) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.innerHTML = "<tr><th>Name</th><th>Count</th></tr>" +
-    Object.entries(obj).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
-}
-
-// ===== MANUAL ENTRY =====
-const addBtn = document.getElementById("rack_add");
-const resetBtn = document.getElementById("rack_reset");
-const rackTable = document.getElementById("rack_table");
-
-if (addBtn && resetBtn && rackTable) {
-  addBtn.onclick = () => {
-    const name = document.getElementById("rack_name").value.trim();
-    const val = document.getElementById("rack_val").value.trim();
-    if (!name || !val) return;
-    rackTable.innerHTML += `<tr><td>${name}</td><td>${val}</td></tr>`;
-  };
-  resetBtn.onclick = () => (rackTable.innerHTML = "<tr><th>Name</th><th>Count</th></tr>");
-}
-
-// ===== PDF MANIFEST READER =====
-const pdfInput = document.getElementById("pdfUpload");
-const pdfTable = document.getElementById("pdfTable");
-const pdfStatus = document.getElementById("pdfStatus");
-
-if (pdfInput) {
-  pdfInput.addEventListener("change", async (e) => {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-    pdfStatus.textContent = "Processing manifests...";
-    pdfTable.innerHTML = "<tr><th>File</th><th>Pages</th><th>Items Detected</th></tr>";
-
-    for (const file of files) {
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const totalPages = pdf.numPages;
-        let itemsFound = 0;
-
-        for (let i = 1; i <= totalPages; i++) {
-          const page = await pdf.getPage(i);
-          const text = await page.getTextContent();
-          const str = text.items.map((t) => t.str).join(" ");
-          const matches = str.match(/\b[A-Z0-9]{6,}\b/g); // detect SKU-like patterns
-          if (matches) itemsFound += matches.length;
-        }
-
-        pdfTable.innerHTML += `<tr><td>${file.name}</td><td>${totalPages}</td><td>${itemsFound}</td></tr>`;
-      } catch (err) {
-        pdfTable.innerHTML += `<tr><td>${file.name}</td><td>⚠️ Error</td><td>${err.message}</td></tr>`;
-      }
-    }
-
-    pdfStatus.textContent = "Manifests processed successfully.";
-  });
-}
-
-// ===== TAB SWITCHING =====
-document.querySelectorAll("nav button").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("section").forEach(s => s.classList.remove("active"));
-    document.getElementById(btn.dataset.target).classList.add("active");
-    document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
-});
-
-refreshBtn.addEventListener("click", fetchDashboard);
-setInterval(fetchDashboard, 120000);
-fetchDashboard();
+document.addEventListener("DOMContentLoaded", init);
