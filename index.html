@@ -1,107 +1,140 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
   <title>RRPD Receiving Dashboard</title>
-
-  <!-- Chart.js -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css" />
+  <!-- Favicon is optional; 404 here is harmless. Remove if you want -->
+  <link rel="icon" href="favicon.ico" />
+  <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
-  <!-- PDF.js (must load before script.js) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
-  <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
-  </script>
-
-  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <img src="detroit-axle-logo.png" alt="Detroit Axle" class="logo" onerror="this.style.display='none'">
-    <h1>RRPD Receiving Dashboard</h1>
-    <button id="refresh_btn">🔄 Refresh Data</button>
+  <header class="app-bar">
+    <div class="app-left">
+      <!-- Make sure this filename matches your repo: detroit-axle-logo.png -->
+      <img src="detroit-axle-logo.png" alt="DA Logo" class="logo" />
+      <div class="app-titles">
+        <h1>RRPD Receiving Dashboard</h1>
+        <span id="status_text" class="status">Loading…</span>
+      </div>
+    </div>
+    <button id="refresh_btn" class="btn primary">Refresh Data</button>
   </header>
 
-  <!-- Diagnostic Banner -->
-  <div id="diagnostic-banner" style="
-    display:none;
-    background:#b91c1c;
-    color:#fff;
-    text-align:center;
-    font-weight:600;
-    padding:10px;
-    letter-spacing:.3px;">
-    ⚠️ Dashboard Notice: One or more scripts failed to load. Check connection or refresh.
-  </div>
-
-  <nav>
-    <button data-target="dashboard" class="active">Dashboard</button>
-    <button data-target="scanners">Scanners</button>
-    <button data-target="classifications">Classifications</button>
-    <button data-target="manual">Manual Entry</button>
-    <button data-target="manifest">Manifest</button>
+  <nav class="tabs">
+    <button class="tab-btn active" data-target="tab-dashboard">Dashboard</button>
+    <button class="tab-btn" data-target="tab-scanners">Scanners</button>
+    <button class="tab-btn" data-target="tab-classifications">Classifications</button>
+    <button class="tab-btn" data-target="tab-manual">Manual Entry</button>
   </nav>
 
-  <!-- Dashboard -->
-  <section id="dashboard" class="active">
-    <div class="panel">
-      <h2>Overall Trends</h2>
-      <canvas id="trend_chart"></canvas>
-    </div>
-    <div class="panel">
-      <h2>Weekly Totals</h2>
-      <canvas id="weekly_chart"></canvas>
-    </div>
-  </section>
+  <main class="page">
+    <!-- DASHBOARD TAB -->
+    <section id="tab-dashboard" class="tab active">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Overall Trends</h2>
+          <p class="panel-sub">Daily totals from API</p>
+          <canvas id="chart_daily"></canvas>
+        </article>
 
-  <!-- Scanners -->
-  <section id="scanners">
-    <div class="panel">
-      <h2>Scans by User</h2>
-      <canvas id="scanner_chart"></canvas>
-      <table id="scanner_totals"></table>
-    </div>
-  </section>
+        <article class="panel">
+          <h2>Weekly Totals</h2>
+          <p class="panel-sub">Weekly roll-up from daily counts</p>
+          <canvas id="chart_weekly"></canvas>
+        </article>
+      </div>
+    </section>
 
-  <!-- Classifications -->
-  <section id="classifications">
-    <div class="panel">
-      <h2>Classification Mix</h2>
-      <canvas id="class_chart"></canvas>
-      <table id="class_table"></table>
-    </div>
-  </section>
+    <!-- SCANNERS TAB -->
+    <section id="tab-scanners" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Scans by User</h2>
+          <p class="panel-sub">All-time totals from API</p>
+          <canvas id="chart_scanners"></canvas>
+        </article>
 
-  <!-- Manual Entry -->
-  <section id="manual">
-    <div class="panel">
-      <h2>Manual Rack Entry</h2>
-      <input type="text" id="rack_name" placeholder="Rack / Bay">
-      <input type="number" id="rack_val" placeholder="Count">
-      <button id="rack_add">Add</button>
-      <button id="rack_reset">Reset</button>
-      <table id="rack_table">
-        <tr><th>Name</th><th>Count</th></tr>
-      </table>
-    </div>
-  </section>
+        <article class="panel">
+          <h2>Scanner Totals</h2>
+          <table id="table_scanners" class="data-table">
+            <thead>
+              <tr><th>Scanner</th><th>Count</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
+    </section>
 
-  <!-- Manifest PDF Reader -->
-  <section id="manifest">
-    <div class="panel">
-      <h2>Manifest (PDF) Upload</h2>
-      <input type="file" id="pdfUpload" accept="application/pdf" multiple>
-      <p id="pdfStatus">No manifests uploaded.</p>
-      <table id="pdfTable">
-        <tr><th>File</th><th>Pages</th><th>Items Detected</th></tr>
-      </table>
-    </div>
-  </section>
+    <!-- CLASSIFICATIONS TAB -->
+    <section id="tab-classifications" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Classification Mix</h2>
+          <p class="panel-sub">Good / Used / Core / Other</p>
+          <canvas id="chart_class_pie"></canvas>
+        </article>
 
-  <footer>
-    <p id="status">Loading data...</p>
+        <article class="panel">
+          <h2>Classification Totals</h2>
+          <table id="table_class" class="data-table">
+            <thead>
+              <tr><th>Classification</th><th>Count</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <!-- MANUAL ENTRY TAB (Carriers + Racks local only) -->
+    <section id="tab-manual" class="tab">
+      <div class="grid two">
+        <!-- CARRIERS -->
+        <article class="panel">
+          <h2>Carriers (Manual)</h2>
+          <div class="form-row">
+            <input id="carrier_name" type="text" placeholder="Carrier name" />
+            <input id="carrier_val" type="number" min="0" placeholder="Count" />
+            <button id="carrier_add" class="btn small">Add</button>
+            <button id="carrier_reset" class="btn small danger">Reset</button>
+          </div>
+          <table id="table_carriers" class="data-table">
+            <thead>
+              <tr><th>Carrier</th><th>Count</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <p class="panel-sub note">Local only – not saved to the API.</p>
+        </article>
+
+        <!-- RACKS -->
+        <article class="panel">
+          <h2>Racks / Bays (Manual)</h2>
+          <div class="form-row">
+            <input id="rack_name" type="text" placeholder="Rack / Bay" />
+            <input id="rack_val" type="number" min="0" placeholder="Count" />
+            <button id="rack_add" class="btn small">Add</button>
+            <button id="rack_reset" class="btn small danger">Reset</button>
+          </div>
+          <table id="table_racks" class="data-table">
+            <thead>
+              <tr><th>Rack / Bay</th><th>Count</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <p class="panel-sub note">Local only – not saved to the API.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>RRPD • Detroit Axle</span>
+    <span id="updated_small"></span>
   </footer>
 
   <script src="script.js"></script>
