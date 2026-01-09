@@ -1,3 +1,0 @@
-git add .
-git commit -m "Add Netlify serverless functions"
-git push
