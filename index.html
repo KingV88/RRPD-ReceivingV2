@@ -1,132 +1,258 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>RRPD Receiving Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="style.css" />
-  <!-- Favicon is optional; 404 here is harmless. Remove if you want -->
   <link rel="icon" href="favicon.ico" />
-  <!-- Chart.js CDN -->
+  <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
+
 <body>
   <header class="app-bar">
     <div class="app-left">
-      <!-- Make sure this filename matches your repo: detroit-axle-logo.png -->
       <img src="detroit-axle-logo.png" alt="DA Logo" class="logo" />
       <div class="app-titles">
         <h1>RRPD Receiving Dashboard</h1>
-        <span id="status_text" class="status">Loading…</span>
+        <span id="status_text" class="status">Ready</span>
       </div>
     </div>
-    <button id="refresh_btn" class="btn primary">Refresh Data</button>
+    <div class="app-right">
+      <button id="export_all_btn" class="btn primary">Export All (CSV)</button>
+    </div>
   </header>
 
   <nav class="tabs">
-    <button class="tab-btn active" data-target="tab-dashboard">Dashboard</button>
-    <button class="tab-btn" data-target="tab-scanners">Scanners</button>
-    <button class="tab-btn" data-target="tab-classifications">Classifications</button>
-    <button class="tab-btn" data-target="tab-manual">Manual Entry</button>
+    <button class="tab-btn active" data-target="tab-csv">CSV Dashboard</button>
+    <button class="tab-btn" data-target="tab-manual">Manual Counts</button>
+    <button class="tab-btn" data-target="tab-carriers">Carriers</button>
+    <button class="tab-btn" data-target="tab-loose">Loose Parts</button>
   </nav>
 
   <main class="page">
-    <!-- DASHBOARD TAB -->
-    <section id="tab-dashboard" class="tab active">
+    <!-- CSV DASHBOARD -->
+    <section id="tab-csv" class="tab active">
       <div class="grid two">
         <article class="panel">
-          <h2>Overall Trends</h2>
-          <p class="panel-sub">Daily totals from API</p>
-          <canvas id="chart_daily"></canvas>
+          <h2>CSV Import</h2>
+          <p class="panel-sub">
+            Upload WH Returns CSV. Counts apply multipliers from <b>Part Number</b> (x2/2x/x3/3x…).
+            Skips only <b>Return Label</b> and rows where <b>Part Number == Track Number</b>.
+            All descriptions (Good/Used/Core/Missing/Not Our Part/Other…) are included.
+          </p>
+
+          <div class="form-row">
+            <input id="csv_file" type="file" accept=".csv" />
+            <button id="csv_export_btn" class="btn small">Export Summary CSV</button>
+            <button id="csv_clear_btn" class="btn small danger">Clear</button>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi"><span class="kpi-label">Counted rows</span><span id="kpi_counted" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Skipped rows</span><span id="kpi_skipped" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Trackings</span><span id="kpi_trackings" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Total parts</span><span id="kpi_parts" class="kpi-val">0</span></div>
+          </div>
+
+          <p class="panel-sub note">
+            Times are stored/exported as <b>UTC ISO 8601</b> to avoid timezone confusion across countries.
+          </p>
         </article>
 
         <article class="panel">
-          <h2>Weekly Totals</h2>
-          <p class="panel-sub">Weekly roll-up from daily counts</p>
-          <canvas id="chart_weekly"></canvas>
+          <h2>Validation</h2>
+          <p class="panel-sub">Proof of what was skipped and why (for accuracy).</p>
+          <table class="data-table" id="table_validation">
+            <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="panel-sub note" id="validation_note"></p>
         </article>
       </div>
-    </section>
 
-    <!-- SCANNERS TAB -->
-    <section id="tab-scanners" class="tab">
       <div class="grid two">
         <article class="panel">
-          <h2>Scans by User</h2>
-          <p class="panel-sub">All-time totals from API</p>
-          <canvas id="chart_scanners"></canvas>
+          <h2>Return Conditions Mix</h2>
+          <p class="panel-sub">Pie chart by PN Description (multiplier-aware)</p>
+          <canvas id="chart_desc_pie"></canvas>
         </article>
 
         <article class="panel">
-          <h2>Scanner Totals</h2>
-          <table id="table_scanners" class="data-table">
-            <thead>
-              <tr><th>Scanner</th><th>Count</th></tr>
-            </thead>
+          <h2>Return Conditions Totals</h2>
+          <p class="panel-sub">Bar graph by PN Description (multiplier-aware)</p>
+          <canvas id="chart_desc_bar"></canvas>
+        </article>
+      </div>
+
+      <div class="grid two">
+        <article class="panel">
+          <h2>Totals by Description</h2>
+          <table class="data-table" id="table_desc">
+            <thead><tr><th>Description</th><th>Parts</th><th>Rows</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+
+        <article class="panel">
+          <h2>Totals by Tracking</h2>
+          <table class="data-table" id="table_tracking">
+            <thead><tr><th>Track Number</th><th>Parts</th></tr></thead>
             <tbody></tbody>
           </table>
         </article>
       </div>
+
+      <article class="panel">
+        <h2>Per-Tracking Breakdown by Description</h2>
+        <p class="panel-sub">Tracking → Description → Parts/Rows</p>
+        <table class="data-table" id="table_breakdown">
+          <thead><tr><th>Track Number</th><th>Description</th><th>Parts</th><th>Rows</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </article>
     </section>
 
-    <!-- CLASSIFICATIONS TAB -->
-    <section id="tab-classifications" class="tab">
-      <div class="grid two">
-        <article class="panel">
-          <h2>Classification Mix</h2>
-          <p class="panel-sub">Good / Used / Core / Other</p>
-          <canvas id="chart_class_pie"></canvas>
-        </article>
-
-        <article class="panel">
-          <h2>Classification Totals</h2>
-          <table id="table_class" class="data-table">
-            <thead>
-              <tr><th>Classification</th><th>Count</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </article>
-      </div>
-    </section>
-
-    <!-- MANUAL ENTRY TAB (Carriers + Racks local only) -->
+    <!-- MANUAL COUNTS -->
     <section id="tab-manual" class="tab">
       <div class="grid two">
-        <!-- CARRIERS -->
         <article class="panel">
-          <h2>Carriers (Manual)</h2>
+          <h2>Manual Entry</h2>
+          <p class="panel-sub">Enter counts (saved locally). Ratios and totals auto-calc.</p>
+
           <div class="form-row">
-            <input id="carrier_name" type="text" placeholder="Carrier name" />
-            <input id="carrier_val" type="number" min="0" placeholder="Count" />
-            <button id="carrier_add" class="btn small">Add</button>
-            <button id="carrier_reset" class="btn small danger">Reset</button>
+            <input id="manual_timestamp" type="datetime-local" />
+            <button id="manual_now" class="btn small">Set = now</button>
+            <button id="manual_save" class="btn small primary">Save</button>
+            <button id="manual_reset" class="btn small danger">Reset</button>
           </div>
-          <table id="table_carriers" class="data-table">
-            <thead>
-              <tr><th>Carrier</th><th>Count</th></tr>
-            </thead>
-            <tbody></tbody>
+
+          <table class="data-table" id="table_manual_inputs">
+            <thead><tr><th>Item</th><th>Count</th></tr></thead>
+            <tbody>
+              <tr><td>Good Racks</td><td><input class="mini-input" id="m_good_racks" type="number" min="0" value="0"></td></tr>
+              <tr><td>Core Racks</td><td><input class="mini-input" id="m_core_racks" type="number" min="0" value="0"></td></tr>
+              <tr><td>Good Electric Racks</td><td><input class="mini-input" id="m_good_e_racks" type="number" min="0" value="0"></td></tr>
+              <tr><td>Core Electric Racks</td><td><input class="mini-input" id="m_core_e_racks" type="number" min="0" value="0"></td></tr>
+
+              <tr><td>Good Axles</td><td><input class="mini-input" id="m_good_axles" type="number" min="0" value="0"></td></tr>
+              <tr><td>Used Axles</td><td><input class="mini-input" id="m_used_axles" type="number" min="0" value="0"></td></tr>
+
+              <tr><td>Good Drive Shafts</td><td><input class="mini-input" id="m_good_ds" type="number" min="0" value="0"></td></tr>
+              <tr><td>Used Drive Shafts</td><td><input class="mini-input" id="m_used_ds" type="number" min="0" value="0"></td></tr>
+
+              <tr><td>Good Gear boxes</td><td><input class="mini-input" id="m_good_gb" type="number" min="0" value="0"></td></tr>
+              <tr><td>Used Gear boxes</td><td><input class="mini-input" id="m_used_gb" type="number" min="0" value="0"></td></tr>
+            </tbody>
           </table>
-          <p class="panel-sub note">Local only – not saved to the API.</p>
+
+          <p class="panel-sub note">
+            Saved timestamp is stored as UTC ISO string for consistent viewing across countries.
+          </p>
         </article>
 
-        <!-- RACKS -->
         <article class="panel">
-          <h2>Racks / Bays (Manual)</h2>
-          <div class="form-row">
-            <input id="rack_name" type="text" placeholder="Rack / Bay" />
-            <input id="rack_val" type="number" min="0" placeholder="Count" />
-            <button id="rack_add" class="btn small">Add</button>
-            <button id="rack_reset" class="btn small danger">Reset</button>
-          </div>
-          <table id="table_racks" class="data-table">
-            <thead>
-              <tr><th>Rack / Bay</th><th>Count</th></tr>
-            </thead>
+          <h2>Totals + Ratios</h2>
+          <table class="data-table" id="table_manual_summary">
+            <thead><tr><th>Metric</th><th>Value</th></tr></thead>
             <tbody></tbody>
           </table>
-          <p class="panel-sub note">Local only – not saved to the API.</p>
+          <p class="panel-sub note" id="manual_saved_at"></p>
+        </article>
+      </div>
+
+      <div class="grid two">
+        <article class="panel">
+          <h2>Manual Totals by Category</h2>
+          <p class="panel-sub">Bar graph: Racks / Axles / Drive Shafts / Gear boxes</p>
+          <canvas id="chart_manual_totals"></canvas>
+        </article>
+
+        <article class="panel">
+          <h2>Manual Condition Mix</h2>
+          <p class="panel-sub">Pie chart: Good vs Used vs Core (aggregated)</p>
+          <canvas id="chart_manual_pie"></canvas>
+        </article>
+      </div>
+
+      <article class="panel">
+        <h2>Manual Split by Category</h2>
+        <p class="panel-sub">Bar graph: Good/Core/Used distribution by category</p>
+        <canvas id="chart_manual_split"></canvas>
+      </article>
+    </section>
+
+    <!-- CARRIERS -->
+    <section id="tab-carriers" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Carrier Log (Manual)</h2>
+          <p class="panel-sub">Log how much you received, when received, and when completed.</p>
+
+          <div class="form-row">
+            <input id="carrier_name" type="text" placeholder="Carrier (UPS, FedEx, etc.)" />
+            <input id="carrier_qty" type="number" min="0" placeholder="Received qty" />
+            <input id="carrier_received" type="datetime-local" />
+            <button id="carrier_received_now" class="btn small">Received = now</button>
+            <input id="carrier_completed" type="datetime-local" />
+            <button id="carrier_completed_now" class="btn small">Completed = now</button>
+
+            <button id="carrier_add" class="btn small primary">Add</button>
+            <button id="carrier_export" class="btn small">Export CSV</button>
+            <button id="carrier_clear" class="btn small danger">Clear</button>
+          </div>
+
+          <table class="data-table" id="table_carriers">
+            <thead><tr><th>Carrier</th><th>Qty</th><th>Received (UTC)</th><th>Completed (UTC)</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+
+        <article class="panel">
+          <h2>Carrier Volume</h2>
+          <p class="panel-sub">Bar graph: total received qty per carrier</p>
+          <canvas id="chart_carriers"></canvas>
+        </article>
+      </div>
+    </section>
+
+    <!-- LOOSE PARTS -->
+    <section id="tab-loose" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Loose Parts (Manual)</h2>
+          <p class="panel-sub">
+            No graph here. Enter part number and condition. Multipliers in part number are supported (x2/2x…).
+          </p>
+
+          <div class="form-row">
+            <input id="loose_part" type="text" placeholder="Part Number (typed if label damaged)" />
+            <select id="loose_cond">
+              <option value="Good">Good</option>
+              <option value="Used">Used</option>
+              <option value="Core">Core</option>
+              <option value="Missing">Missing</option>
+              <option value="Not Our Part">Not Our Part</option>
+              <option value="Other">Other</option>
+            </select>
+            <input id="loose_dt" type="datetime-local" />
+            <button id="loose_now" class="btn small">Set = now</button>
+            <button id="loose_add" class="btn small primary">Add</button>
+            <button id="loose_export" class="btn small">Export CSV</button>
+            <button id="loose_clear" class="btn small danger">Clear</button>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi"><span class="kpi-label">Loose total qty</span><span id="loose_total" class="kpi-val">0</span></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Loose Parts Log</h2>
+          <table class="data-table" id="table_loose">
+            <thead><tr><th>Part</th><th>Condition</th><th>Qty</th><th>Date (UTC)</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </article>
       </div>
     </section>
