@@ -1,11 +1,12 @@
-console.log("RRPD final build loaded");
+console.log("RRPD build loaded (XLSX export + FedEx check + carrier complete toggle)");
 
 /* ================== Storage keys ================== */
 const KEYS = {
   CSV_LAST: "rrpd_csv_last_summary_final",
   MANUAL: "rrpd_manual_counts_final",
   CARRIERS: "rrpd_carriers_final",
-  LOOSE: "rrpd_loose_parts_final"
+  LOOSE: "rrpd_loose_parts_final",
+  FEDEX_LAST: "rrpd_fedex_last_final"
 };
 
 const statusEl = document.getElementById("status_text");
@@ -155,24 +156,24 @@ function normalizeDesc(desc) {
 
 /**
  * Safe multiplier parser:
- * - Counts only if pattern is prefix/suffix multiplier with small N.
- * - Prevents "x2020" being treated as 2020 parts.
+ * Only counts when it looks like a real multiplier and small N.
+ * Prevents "x2020" being treated as 2020 parts.
  */
 function qtyFromPart(partStr) {
   const s = String(partStr || "").trim();
   const low = s.toLowerCase();
 
   const MIN = 2;
-  const MAX = 20; // tighten later if you want (e.g., 10)
+  const MAX = 20; // set tighter if you want (ex: 6)
 
-  // Suffix: "...x2" "... x 2" with a real preceding char
+  // Suffix: "...x2" with a real preceding char
   let m = low.match(/([a-z0-9])\s*x\s*(\d{1,2})\b/);
   if (m) {
     const n = parseInt(m[2], 10);
     if (n >= MIN && n <= MAX) return n;
   }
 
-  // Prefix: "2x..." "2 x ..." with a real following char
+  // Prefix: "2x..." with a real following char
   m = low.match(/\b(\d{1,2})\s*x\s*([a-z0-9])/);
   if (m) {
     const n = parseInt(m[1], 10);
@@ -233,7 +234,7 @@ function analyzeCSV(records) {
   let trackingArr = [...totalsByTracking.entries()]
     .map(([tracking, parts]) => ({ tracking, parts }));
 
-  // ✅ improvement: sort by most parts first, then tracking
+  // Sort by most parts first
   trackingArr.sort((a, b) => (b.parts - a.parts) || a.tracking.localeCompare(b.tracking));
 
   const descArr = [...totalsByDesc.entries()]
@@ -262,7 +263,7 @@ function analyzeCSV(records) {
   };
 }
 
-/* ================== CSV render + export ================== */
+/* ================== CSV render + export (CSV) ================== */
 function downloadCSV(filename, rows) {
   const esc = (v) => {
     const s = String(v ?? "");
@@ -299,7 +300,7 @@ function renderCSV(summary) {
   if (note) note.textContent = `Last run: ${isoDisplay(summary.updatedISO)}`;
 
   const hint = document.getElementById("csv_hint");
-  if (hint) hint.textContent = `Tracking table is sorted by most parts first. Export includes full breakdown (not limited).`;
+  if (hint) hint.textContent = `Tracking table is sorted by most parts first. Export All creates a multi-tab Excel file.`;
 
   // Totals by description
   const dbody = document.querySelector("#table_desc tbody");
@@ -310,7 +311,7 @@ function renderCSV(summary) {
     dbody.appendChild(tr);
   });
 
-  // Totals by tracking (already sorted by parts desc)
+  // Totals by tracking
   const tbody = document.querySelector("#table_tracking tbody");
   tbody.innerHTML = "";
   summary.trackingArr.forEach(r => {
@@ -319,7 +320,7 @@ function renderCSV(summary) {
     tbody.appendChild(tr);
   });
 
-  // Breakdown (limit for screen, full in export)
+  // Breakdown (limit for screen)
   const bbody = document.querySelector("#table_breakdown tbody");
   bbody.innerHTML = "";
   summary.breakdownArr.slice(0, 250).forEach(r => {
@@ -333,6 +334,10 @@ function renderCSV(summary) {
   const values = summary.descArr.map(x => x.parts);
   makeChart("chart_desc_pie", "doughnut", labels, values, "Parts");
   makeChart("chart_desc_bar", "bar", labels, values, "Parts");
+
+  // If FedEx check already loaded, re-run it against updated WH set
+  const fedex = loadJSON(KEYS.FEDEX_LAST, null);
+  if (fedex?.numbers?.length) runFedexCheck(fedex.numbers);
 }
 
 function exportCSVSummary(summary) {
@@ -356,6 +361,177 @@ function exportCSVSummary(summary) {
   summary.validationArr.forEach(r => rows.push([r.reason, r.count]));
 
   downloadCSV("rrpd_csv_summary.csv", rows);
+}
+
+/* ================== XLSX Export (multi-tab) ================== */
+function sheetFromAOA(aoa) {
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function downloadXLSX(filename, sheetsObj) {
+  const wb = XLSX.utils.book_new();
+  Object.entries(sheetsObj).forEach(([name, sheet]) => {
+    XLSX.utils.book_append_sheet(wb, sheet, name.slice(0, 31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+
+function exportAllXLSX() {
+  const csvSummary = loadJSON(KEYS.CSV_LAST, null);
+  const manual = loadJSON(KEYS.MANUAL, null);
+  const carriers = carriersLoad();
+  const loose = looseLoad();
+  const fedex = loadJSON(KEYS.FEDEX_LAST, null);
+
+  const sheets = {};
+
+  // Summary sheet
+  sheets["Summary"] = sheetFromAOA([
+    ["RRPD Export", ""],
+    ["Generated", new Date().toISOString()],
+    [""],
+    ["CSV RunAt", csvSummary?.updatedISO || ""],
+    ["Counted rows", csvSummary?.counted ?? ""],
+    ["Skipped rows", csvSummary?.skipped ?? ""],
+    ["Trackings", csvSummary?.trackings ?? ""],
+    ["Total parts", csvSummary?.totalParts ?? ""],
+    [""],
+    ["FedEx Check Loaded", fedex?.numbers?.length ? "Yes" : "No"],
+    ["FedEx Total", fedex?.numbers?.length ?? 0]
+  ]);
+
+  // Conditions
+  sheets["Conditions"] = sheetFromAOA([
+    ["Description","Parts","Rows"],
+    ...((csvSummary?.descArr || []).map(r => [r.desc, r.parts, r.rows]))
+  ]);
+
+  // Tracking totals
+  sheets["TrackingTotals"] = sheetFromAOA([
+    ["Tracking","TotalParts"],
+    ...((csvSummary?.trackingArr || []).map(r => [r.tracking, r.parts]))
+  ]);
+
+  // Tracking breakdown
+  sheets["TrackingBreakdown"] = sheetFromAOA([
+    ["Tracking","Description","Parts","Rows"],
+    ...((csvSummary?.breakdownArr || []).map(r => [r.tracking, r.desc, r.parts, r.rows]))
+  ]);
+
+  // Validation
+  sheets["Validation"] = sheetFromAOA([
+    ["Reason","Count"],
+    ...((csvSummary?.validationArr || []).map(r => [r.reason, r.count]))
+  ]);
+
+  // Manual
+  const manualAOA = [["Field","Value"]];
+  if (manual?.savedAtISO) manualAOA.push(["SavedAt", manual.savedAtISO]);
+  if (manual?.inputs) {
+    Object.entries(manual.inputs).forEach(([k,v]) => manualAOA.push([k, v]));
+  }
+  sheets["ManualCounts"] = sheetFromAOA(manualAOA);
+
+  // Carriers
+  sheets["Carriers"] = sheetFromAOA([
+    ["Carrier","Qty","ReceivedISO","CompletedISO","Status"],
+    ...carriers.map(c => [
+      c.name,
+      c.qty,
+      c.receivedISO || "",
+      c.completedISO || "",
+      c.completedISO ? "Completed" : "Open"
+    ])
+  ]);
+
+  // Loose
+  sheets["LooseParts"] = sheetFromAOA([
+    ["Part","Condition","Qty","DateISO"],
+    ...loose.map(l => [l.part, l.cond, l.qty, l.dtISO])
+  ]);
+
+  // FedEx check results (if present + CSV present)
+  if (fedex?.numbers?.length && csvSummary?.trackingArr?.length) {
+    const whSet = new Set(csvSummary.trackingArr.map(x => String(x.tracking).trim()));
+    const fedSet = new Set(fedex.numbers.map(x => String(x).trim()));
+
+    const missingInWH = [...fedSet].filter(x => !whSet.has(x)).sort();
+    const missingInFedEx = [...whSet].filter(x => !fedSet.has(x)).sort();
+
+    sheets["FedExCheck"] = sheetFromAOA([
+      ["Type","TrackingNumber"],
+      ...missingInWH.map(x => ["Missing in WH", x]),
+      ...missingInFedEx.map(x => ["Missing in FedEx", x])
+    ]);
+  }
+
+  downloadXLSX("rrpd_all_export.xlsx", sheets);
+  statusEl.textContent = "Exported rrpd_all_export.xlsx";
+}
+
+/* ================== FedEx list check ================== */
+function extractTrackingNumbers(text) {
+  const s = String(text || "");
+  // Grab common patterns:
+  // - Long numeric (10-40 digits)
+  // - UPS 1Z...
+  // - Alphanumeric 10-30
+  const matches = s.match(/\b1Z[0-9A-Z]{10,20}\b|\b\d{10,40}\b|\b[0-9A-Z]{10,30}\b/g) || [];
+  // Normalize: trim, remove spaces
+  const norm = matches.map(x => String(x).trim()).filter(Boolean);
+  // Deduplicate but preserve order
+  const seen = new Set();
+  const out = [];
+  for (const n of norm) {
+    if (!seen.has(n)) { seen.add(n); out.push(n); }
+  }
+  return out;
+}
+
+function runFedexCheck(fedexNums) {
+  const csvSummary = loadJSON(KEYS.CSV_LAST, null);
+  const tbody = document.querySelector("#table_fedex_diff tbody");
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+
+  if (!csvSummary?.trackingArr?.length) {
+    setText("kpi_fedex_total", fedexNums.length);
+    setText("kpi_fedex_matched", 0);
+    setText("kpi_fedex_missing_in_wh", fedexNums.length);
+    setText("kpi_wh_missing_in_fedex", 0);
+
+    fedexNums.forEach(n => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>Missing in WH (load WH CSV first)</td><td>${n}</td>`;
+      tbody.appendChild(tr);
+    });
+    return;
+  }
+
+  const whSet = new Set(csvSummary.trackingArr.map(x => String(x.tracking).trim()));
+  const fedSet = new Set(fedexNums.map(x => String(x).trim()));
+
+  const missingInWH = [...fedSet].filter(x => !whSet.has(x)).sort();
+  const missingInFedEx = [...whSet].filter(x => !fedSet.has(x)).sort();
+  const matched = fedexNums.length - missingInWH.length;
+
+  setText("kpi_fedex_total", fedexNums.length);
+  setText("kpi_fedex_matched", matched);
+  setText("kpi_fedex_missing_in_wh", missingInWH.length);
+  setText("kpi_wh_missing_in_fedex", missingInFedEx.length);
+
+  // Fill table (both categories)
+  missingInWH.forEach(n => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>Missing in WH</td><td>${n}</td>`;
+    tbody.appendChild(tr);
+  });
+  missingInFedEx.forEach(n => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>Missing in FedEx</td><td>${n}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 /* ================== Manual Counts ================== */
@@ -452,6 +628,21 @@ function manualRender(state) {
 function carriersLoad() { return loadJSON(KEYS.CARRIERS, []); }
 function carriersSave(list) { saveJSON(KEYS.CARRIERS, list); }
 
+function setCarrierCompleted(id, done) {
+  const list = carriersLoad();
+  const item = list.find(x => x.id === id);
+  if (!item) return;
+
+  if (done) {
+    item.completedISO = item.completedISO || new Date().toISOString();
+  } else {
+    item.completedISO = "";
+  }
+
+  carriersSave(list);
+  carriersRender();
+}
+
 function carriersRender() {
   const list = carriersLoad();
   const tbody = document.querySelector("#table_carriers tbody");
@@ -462,9 +653,11 @@ function carriersRender() {
   list.forEach(item => {
     totals.set(item.name, (totals.get(item.name) || 0) + item.qty);
 
-    const tr = document.createElement("tr");
     const status = item.completedISO ? "Completed" : "Open";
+
+    const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td></td>
       <td>${item.name}</td>
       <td>${item.qty}</td>
       <td>${isoDisplay(item.receivedISO)}</td>
@@ -472,22 +665,53 @@ function carriersRender() {
       <td>${status}</td>
       <td></td>
     `;
-    const td = tr.lastElementChild;
+
+    // Done checkbox
+    const doneTd = tr.children[0];
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "chk";
+    chk.checked = Boolean(item.completedISO);
+    chk.addEventListener("change", () => setCarrierCompleted(item.id, chk.checked));
+    doneTd.appendChild(chk);
+
+    // Actions
+    const actionsTd = tr.lastElementChild;
+
+    const toggle = document.createElement("button");
+    toggle.className = "btn small";
+    toggle.textContent = item.completedISO ? "Reopen" : "Mark Completed";
+    toggle.addEventListener("click", () => setCarrierCompleted(item.id, !item.completedISO));
+    actionsTd.appendChild(toggle);
+
     const del = document.createElement("button");
     del.className = "btn small danger";
+    del.style.marginLeft = "6px";
     del.textContent = "Delete";
     del.addEventListener("click", () => {
       const next = carriersLoad().filter(x => x.id !== item.id);
       carriersSave(next);
       carriersRender();
     });
-    td.appendChild(del);
+    actionsTd.appendChild(del);
+
     tbody.appendChild(tr);
   });
 
   const labels = [...totals.keys()].sort((a,b)=>a.localeCompare(b));
   const values = labels.map(k => totals.get(k));
   makeChart("chart_carriers", "bar", labels, values, "Received Qty");
+}
+
+function exportCarriersXLSX() {
+  const list = carriersLoad();
+  downloadXLSX("rrpd_carriers.xlsx", {
+    "Carriers": sheetFromAOA([
+      ["Carrier","Qty","ReceivedISO","CompletedISO","Status"],
+      ...list.map(c => [c.name, c.qty, c.receivedISO || "", c.completedISO || "", c.completedISO ? "Completed" : "Open"])
+    ])
+  });
+  statusEl.textContent = "Exported rrpd_carriers.xlsx";
 }
 
 /* ================== Loose parts ================== */
@@ -512,6 +736,7 @@ function looseRender() {
       <td></td>
     `;
     const td = tr.lastElementChild;
+
     const del = document.createElement("button");
     del.className = "btn small danger";
     del.textContent = "Delete";
@@ -521,54 +746,22 @@ function looseRender() {
       looseRender();
     });
     td.appendChild(del);
+
     tbody.appendChild(tr);
   });
 
   setText("loose_total", total);
 }
 
-/* ================== Export All ================== */
-function exportAll() {
-  const csvSummary = loadJSON(KEYS.CSV_LAST, null);
-  const manual = loadJSON(KEYS.MANUAL, null);
-  const carriers = carriersLoad();
-  const loose = looseLoad();
-
-  const rows = [];
-  rows.push(["SECTION","A","B","C","D","E"]);
-
-  rows.push(["CSV Summary", "RunAt", csvSummary?.updatedISO || "", "", "", ""]);
-  rows.push(["Totals by Description", "Description", "Parts", "Rows", "", ""]);
-  (csvSummary?.descArr || []).forEach(r => rows.push(["", r.desc, r.parts, r.rows, "", ""]));
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Totals by Tracking (sorted by parts desc)", "Tracking", "Parts", "", "", ""]);
-  (csvSummary?.trackingArr || []).forEach(r => rows.push(["", r.tracking, r.parts, "", "", ""]));
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Breakdown", "Tracking", "Description", "Parts", "Rows", ""]);
-  (csvSummary?.breakdownArr || []).forEach(r => rows.push(["", r.tracking, r.desc, r.parts, r.rows, ""]));
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Validation / Skips", "Reason", "Count", "", "", ""]);
-  (csvSummary?.validationArr || []).forEach(r => rows.push(["", r.reason, r.count, "", "", ""]));
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Manual Counts", "SavedAt", manual?.savedAtISO || "", "", "", ""]);
-  if (manual?.inputs) {
-    Object.entries(manual.inputs).forEach(([k,v]) => rows.push(["", k, v, "", "", ""]));
-  }
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Carriers", "Carrier", "Qty", "ReceivedISO", "CompletedISO", ""]);
-  carriers.forEach(c => rows.push(["", c.name, c.qty, c.receivedISO || "", c.completedISO || "", ""]));
-
-  rows.push(["", "", "", "", "", ""]);
-  rows.push(["Loose Parts", "Part", "Condition", "Qty", "DateISO", ""]);
-  loose.forEach(l => rows.push(["", l.part, l.cond, l.qty, l.dtISO, ""]));
-
-  downloadCSV("rrpd_all_export.csv", rows);
-  statusEl.textContent = "Exported rrpd_all_export.csv";
+function exportLooseXLSX() {
+  const list = looseLoad();
+  downloadXLSX("rrpd_loose_parts.xlsx", {
+    "LooseParts": sheetFromAOA([
+      ["Part","Condition","Qty","DateISO"],
+      ...list.map(l => [l.part, l.cond, l.qty, l.dtISO])
+    ])
+  });
+  statusEl.textContent = "Exported rrpd_loose_parts.xlsx";
 }
 
 /* ================== Init ================== */
@@ -616,6 +809,36 @@ function init() {
       counted: 0, skipped: 0, trackings: 0, totalParts: 0,
       trackingArr: [], descArr: [], breakdownArr: [], validationArr: []
     });
+  });
+
+  // FedEx file check
+  const fedexFile = document.getElementById("fedex_file");
+  fedexFile?.addEventListener("change", async () => {
+    const file = fedexFile.files?.[0];
+    if (!file) return;
+    try {
+      statusEl.textContent = "Reading FedEx list…";
+      const text = await file.text();
+      const numbers = extractTrackingNumbers(text);
+      saveJSON(KEYS.FEDEX_LAST, { updatedISO: new Date().toISOString(), numbers });
+      runFedexCheck(numbers);
+      statusEl.textContent = `FedEx list loaded (${numbers.length})`;
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "FedEx read error — check console";
+    }
+  });
+
+  document.getElementById("fedex_clear_btn")?.addEventListener("click", () => {
+    localStorage.removeItem(KEYS.FEDEX_LAST);
+    setText("kpi_fedex_total", 0);
+    setText("kpi_fedex_matched", 0);
+    setText("kpi_fedex_missing_in_wh", 0);
+    setText("kpi_wh_missing_in_fedex", 0);
+    const tbody = document.querySelector("#table_fedex_diff tbody");
+    if (tbody) tbody.innerHTML = "";
+    statusEl.textContent = "FedEx check cleared";
+    if (fedexFile) fedexFile.value = "";
   });
 
   // Manual
@@ -677,13 +900,7 @@ function init() {
     statusEl.textContent = "Carrier added";
   });
 
-  document.getElementById("carrier_export")?.addEventListener("click", () => {
-    const list = carriersLoad();
-    const rows = [["Carrier","Qty","ReceivedISO","CompletedISO"]];
-    list.forEach(c => rows.push([c.name, c.qty, c.receivedISO || "", c.completedISO || ""]));
-    downloadCSV("rrpd_carriers.csv", rows);
-    statusEl.textContent = "Exported rrpd_carriers.csv";
-  });
+  document.getElementById("carrier_export")?.addEventListener("click", exportCarriersXLSX);
 
   document.getElementById("carrier_clear")?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.CARRIERS);
@@ -715,13 +932,7 @@ function init() {
     statusEl.textContent = "Loose part added";
   });
 
-  document.getElementById("loose_export")?.addEventListener("click", () => {
-    const list = looseLoad();
-    const rows = [["Part","Condition","Qty","DateISO"]];
-    list.forEach(l => rows.push([l.part, l.cond, l.qty, l.dtISO]));
-    downloadCSV("rrpd_loose_parts.csv", rows);
-    statusEl.textContent = "Exported rrpd_loose_parts.csv";
-  });
+  document.getElementById("loose_export")?.addEventListener("click", exportLooseXLSX);
 
   document.getElementById("loose_clear")?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.LOOSE);
@@ -729,12 +940,15 @@ function init() {
     statusEl.textContent = "Loose parts cleared";
   });
 
-  // Export All
-  document.getElementById("export_all_btn")?.addEventListener("click", exportAll);
+  // Export All (XLSX)
+  document.getElementById("export_all_btn")?.addEventListener("click", exportAllXLSX);
 
   // Restore saved state
   const savedCSV = loadJSON(KEYS.CSV_LAST, null);
   if (savedCSV) renderCSV(savedCSV);
+
+  const savedFedex = loadJSON(KEYS.FEDEX_LAST, null);
+  if (savedFedex?.numbers?.length) runFedexCheck(savedFedex.numbers);
 
   const savedManual = loadJSON(KEYS.MANUAL, null);
   if (savedManual?.inputs) {
