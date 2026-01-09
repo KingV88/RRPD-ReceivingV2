@@ -1,19 +1,19 @@
-console.log("RRPD corrected V2 loaded");
+console.log("RRPD final build loaded");
 
 /* ================== Storage keys ================== */
 const KEYS = {
-  CSV_LAST: "rrpd_csv_last_summary_v2",
-  MANUAL: "rrpd_manual_counts_v2",
-  CARRIERS: "rrpd_carriers_v2",
-  LOOSE: "rrpd_loose_parts_v2"
+  CSV_LAST: "rrpd_csv_last_summary_final",
+  MANUAL: "rrpd_manual_counts_final",
+  CARRIERS: "rrpd_carriers_final",
+  LOOSE: "rrpd_loose_parts_final"
 };
 
 const statusEl = document.getElementById("status_text");
 const updatedSmall = document.getElementById("updated_small");
 
-let charts = {}; // Chart.js instances
+let charts = {};
 
-/* ================== Small helpers ================== */
+/* ================== Helpers ================== */
 function setText(id, txt) {
   const el = document.getElementById(id);
   if (el) el.textContent = String(txt);
@@ -46,9 +46,7 @@ function localToISO(dtLocal) {
 }
 function isoDisplay(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
-  // Display in local machine time, but with full timestamp clarity
-  return d.toLocaleString();
+  return new Date(iso).toLocaleString();
 }
 
 /* ================== Tabs ================== */
@@ -156,25 +154,25 @@ function normalizeDesc(desc) {
 }
 
 /**
- * PERFECT multiplier parser:
- * - Only counts multipliers when they look like prefix/suffix multipliers with a small N.
- * - Avoids treating part numbers like "x2020" as 2020 parts.
+ * Safe multiplier parser:
+ * - Counts only if pattern is prefix/suffix multiplier with small N.
+ * - Prevents "x2020" being treated as 2020 parts.
  */
 function qtyFromPart(partStr) {
   const s = String(partStr || "").trim();
   const low = s.toLowerCase();
 
   const MIN = 2;
-  const MAX = 20; // safe. If you want stricter, set MAX = 10 or 6.
+  const MAX = 20; // tighten later if you want (e.g., 10)
 
-  // Suffix: "...x2" "... x 2" with a real preceding character
+  // Suffix: "...x2" "... x 2" with a real preceding char
   let m = low.match(/([a-z0-9])\s*x\s*(\d{1,2})\b/);
   if (m) {
     const n = parseInt(m[2], 10);
     if (n >= MIN && n <= MAX) return n;
   }
 
-  // Prefix: "2x..." "2 x ..." with a real following character
+  // Prefix: "2x..." "2 x ..." with a real following char
   m = low.match(/\b(\d{1,2})\s*x\s*([a-z0-9])/);
   if (m) {
     const n = parseInt(m[1], 10);
@@ -232,9 +230,11 @@ function analyzeCSV(records) {
 
   const skipped = validationArr.reduce((a,x)=>a+x.count,0);
 
-  const trackingArr = [...totalsByTracking.entries()]
-    .map(([tracking, parts]) => ({ tracking, parts }))
-    .sort((a,b)=>a.tracking.localeCompare(b.tracking));
+  let trackingArr = [...totalsByTracking.entries()]
+    .map(([tracking, parts]) => ({ tracking, parts }));
+
+  // ✅ improvement: sort by most parts first, then tracking
+  trackingArr.sort((a, b) => (b.parts - a.parts) || a.tracking.localeCompare(b.tracking));
 
   const descArr = [...totalsByDesc.entries()]
     .map(([desc, parts]) => ({ desc, parts, rows: rowsByDesc.get(desc) || 0 }))
@@ -298,6 +298,9 @@ function renderCSV(summary) {
   const note = document.getElementById("csv_run_note");
   if (note) note.textContent = `Last run: ${isoDisplay(summary.updatedISO)}`;
 
+  const hint = document.getElementById("csv_hint");
+  if (hint) hint.textContent = `Tracking table is sorted by most parts first. Export includes full breakdown (not limited).`;
+
   // Totals by description
   const dbody = document.querySelector("#table_desc tbody");
   dbody.innerHTML = "";
@@ -307,7 +310,7 @@ function renderCSV(summary) {
     dbody.appendChild(tr);
   });
 
-  // Totals by tracking
+  // Totals by tracking (already sorted by parts desc)
   const tbody = document.querySelector("#table_tracking tbody");
   tbody.innerHTML = "";
   summary.trackingArr.forEach(r => {
@@ -316,7 +319,7 @@ function renderCSV(summary) {
     tbody.appendChild(tr);
   });
 
-  // Breakdown table (limit 250 for page length)
+  // Breakdown (limit for screen, full in export)
   const bbody = document.querySelector("#table_breakdown tbody");
   bbody.innerHTML = "";
   summary.breakdownArr.slice(0, 250).forEach(r => {
@@ -340,7 +343,7 @@ function exportCSVSummary(summary) {
   rows.push(["Description","Parts","Rows"]);
   summary.descArr.forEach(r => rows.push([r.desc, r.parts, r.rows]));
   rows.push([""]);
-  rows.push(["Totals by Tracking"]);
+  rows.push(["Totals by Tracking (sorted by parts desc)"]);
   rows.push(["Tracking","Parts"]);
   summary.trackingArr.forEach(r => rows.push([r.tracking, r.parts]));
   rows.push([""]);
@@ -372,7 +375,6 @@ function ratioText(a, b) {
   const pctB = 100 - pctA;
   return `${a}:${b} (${pctA}% / ${pctB}%)`;
 }
-
 function manualRead() {
   return {
     goodRacks: n("m_good_racks"),
@@ -387,19 +389,16 @@ function manualRead() {
     usedGB: n("m_used_gb")
   };
 }
-
 function manualRender(state) {
   const inputs = state?.inputs;
   if (!inputs) return;
 
-  // Totals
   const totalRacks = inputs.goodRacks + inputs.coreRacks + inputs.goodERacks + inputs.coreERacks;
   const totalAxles = inputs.goodAxles + inputs.usedAxles;
   const totalDS = inputs.goodDS + inputs.usedDS;
   const totalGB = inputs.goodGB + inputs.usedGB;
   const grand = totalRacks + totalAxles + totalDS + totalGB;
 
-  // Conditions totals (manual)
   const goodTotal = inputs.goodRacks + inputs.goodERacks + inputs.goodAxles + inputs.goodDS + inputs.goodGB;
   const coreTotal = inputs.coreRacks + inputs.coreERacks;
   const usedTotal = inputs.usedAxles + inputs.usedDS + inputs.usedGB;
@@ -429,7 +428,6 @@ function manualRender(state) {
   const note = document.getElementById("manual_saved_note");
   if (note) note.textContent = `Saved: ${isoDisplay(state.savedAtISO)}`;
 
-  // Charts
   makeChart("chart_manual_totals", "bar",
     ["Racks","Axles","Drive Shafts","Gear boxes"],
     [totalRacks,totalAxles,totalDS,totalGB],
@@ -484,7 +482,6 @@ function carriersRender() {
       carriersRender();
     });
     td.appendChild(del);
-
     tbody.appendChild(tr);
   });
 
@@ -505,6 +502,7 @@ function looseRender() {
   let total = 0;
   list.forEach(item => {
     total += item.qty;
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${item.part}</td>
@@ -523,7 +521,6 @@ function looseRender() {
       looseRender();
     });
     td.appendChild(del);
-
     tbody.appendChild(tr);
   });
 
@@ -545,7 +542,7 @@ function exportAll() {
   (csvSummary?.descArr || []).forEach(r => rows.push(["", r.desc, r.parts, r.rows, "", ""]));
 
   rows.push(["", "", "", "", "", ""]);
-  rows.push(["Totals by Tracking", "Tracking", "Parts", "", "", ""]);
+  rows.push(["Totals by Tracking (sorted by parts desc)", "Tracking", "Parts", "", "", ""]);
   (csvSummary?.trackingArr || []).forEach(r => rows.push(["", r.tracking, r.parts, "", "", ""]));
 
   rows.push(["", "", "", "", "", ""]);
@@ -574,7 +571,7 @@ function exportAll() {
   statusEl.textContent = "Exported rrpd_all_export.csv";
 }
 
-/* ================== Init / Wire UI ================== */
+/* ================== Init ================== */
 function init() {
   wireTabs();
 
@@ -623,14 +620,13 @@ function init() {
 
   // Manual
   const manualDT = document.getElementById("manual_dt");
-  const manualNow = document.getElementById("manual_now");
-  const manualSave = document.getElementById("manual_save");
-  const manualClear = document.getElementById("manual_clear");
-
   if (manualDT) manualDT.value = toLocalInputNow();
-  manualNow?.addEventListener("click", () => { if (manualDT) manualDT.value = toLocalInputNow(); });
 
-  manualSave?.addEventListener("click", () => {
+  document.getElementById("manual_now")?.addEventListener("click", () => {
+    if (manualDT) manualDT.value = toLocalInputNow();
+  });
+
+  document.getElementById("manual_save")?.addEventListener("click", () => {
     const inputs = manualRead();
     const savedAtISO = localToISO(manualDT?.value) || new Date().toISOString();
     const state = { inputs, savedAtISO };
@@ -639,7 +635,7 @@ function init() {
     manualRender(state);
   });
 
-  manualClear?.addEventListener("click", () => {
+  document.getElementById("manual_clear")?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.MANUAL);
     [
       "m_good_racks","m_core_racks","m_good_eracks","m_core_eracks",
@@ -652,10 +648,12 @@ function init() {
   });
 
   // Carriers
-  const receivedNow = document.getElementById("carrier_received_now");
-  const completedNow = document.getElementById("carrier_completed_now");
-  receivedNow?.addEventListener("click", () => { document.getElementById("carrier_received").value = toLocalInputNow(); });
-  completedNow?.addEventListener("click", () => { document.getElementById("carrier_completed").value = toLocalInputNow(); });
+  document.getElementById("carrier_received_now")?.addEventListener("click", () => {
+    document.getElementById("carrier_received").value = toLocalInputNow();
+  });
+  document.getElementById("carrier_completed_now")?.addEventListener("click", () => {
+    document.getElementById("carrier_completed").value = toLocalInputNow();
+  });
 
   document.getElementById("carrier_add")?.addEventListener("click", () => {
     const name = String(document.getElementById("carrier_name").value || "").trim();
@@ -734,26 +732,23 @@ function init() {
   // Export All
   document.getElementById("export_all_btn")?.addEventListener("click", exportAll);
 
-  // Initial render from saved states
+  // Restore saved state
   const savedCSV = loadJSON(KEYS.CSV_LAST, null);
   if (savedCSV) renderCSV(savedCSV);
 
   const savedManual = loadJSON(KEYS.MANUAL, null);
-  if (savedManual) {
-    // restore inputs
+  if (savedManual?.inputs) {
     const i = savedManual.inputs;
-    if (i) {
-      setN("m_good_racks", i.goodRacks);
-      setN("m_core_racks", i.coreRacks);
-      setN("m_good_eracks", i.goodERacks);
-      setN("m_core_eracks", i.coreERacks);
-      setN("m_good_axles", i.goodAxles);
-      setN("m_used_axles", i.usedAxles);
-      setN("m_good_ds", i.goodDS);
-      setN("m_used_ds", i.usedDS);
-      setN("m_good_gb", i.goodGB);
-      setN("m_used_gb", i.usedGB);
-    }
+    setN("m_good_racks", i.goodRacks);
+    setN("m_core_racks", i.coreRacks);
+    setN("m_good_eracks", i.goodERacks);
+    setN("m_core_eracks", i.coreERacks);
+    setN("m_good_axles", i.goodAxles);
+    setN("m_used_axles", i.usedAxles);
+    setN("m_good_ds", i.goodDS);
+    setN("m_used_ds", i.usedDS);
+    setN("m_good_gb", i.goodGB);
+    setN("m_used_gb", i.usedGB);
     manualRender(savedManual);
   }
 
