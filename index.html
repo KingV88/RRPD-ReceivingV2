@@ -4,8 +4,11 @@
   <meta charset="UTF-8" />
   <title>RRPD Receiving Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="favicon.ico" />
+
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 
@@ -67,7 +70,7 @@
         <article class="panel">
           <h2>Validation / Skips</h2>
           <p class="panel-sub">
-            This proves what was skipped and why (audit-friendly).
+            Audit-friendly proof of what was skipped and why.
           </p>
           <div class="table-scroll">
             <table id="table_validation" class="data-table">
@@ -79,6 +82,7 @@
         </article>
       </div>
 
+      <!-- ===== Return Conditions ONLY ===== -->
       <div class="grid two">
         <article class="panel">
           <h2>Return Conditions Mix</h2>
@@ -105,29 +109,41 @@
         </article>
 
         <article class="panel">
-          <h2>Totals by Tracking</h2>
-          <p class="panel-sub">Grouped even if the CSV is scattered</p>
-          <div class="table-scroll">
+          <h2>Notes</h2>
+          <p class="panel-sub">
+            Tracking totals are separated below. The tracking list is sorted by <b>most parts first</b>.
+          </p>
+          <p class="panel-sub note" id="csv_hint"></p>
+        </article>
+      </div>
+
+      <!-- ===== Tracking + Part Count ONLY ===== -->
+      <div class="grid two">
+        <article class="panel">
+          <h2>Tracking Numbers + Total Parts</h2>
+          <p class="panel-sub">Main receiving view (multiplier-aware)</p>
+          <div class="table-scroll tall">
             <table id="table_tracking" class="data-table">
-              <thead><tr><th>Track Number</th><th>Parts</th></tr></thead>
+              <thead><tr><th>Track Number</th><th>Total Parts</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Tracking Breakdown (by Description)</h2>
+          <p class="panel-sub">
+            Showing top <b>250</b> lines to keep the page short (export includes everything).
+          </p>
+          <div class="table-scroll tall">
+            <table id="table_breakdown" class="data-table">
+              <thead><tr><th>Track Number</th><th>Description</th><th>Parts</th><th>Rows</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
         </article>
       </div>
 
-      <article class="panel">
-        <h2>Per-Tracking Breakdown by Description</h2>
-        <p class="panel-sub">
-          Showing top <b>250</b> lines to keep the page short (export includes everything).
-        </p>
-        <div class="table-scroll tall">
-          <table id="table_breakdown" class="data-table">
-            <thead><tr><th>Track Number</th><th>Description</th><th>Parts</th><th>Rows</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </article>
     </section>
 
     <!-- ================= MANUAL COUNTS ================= -->
