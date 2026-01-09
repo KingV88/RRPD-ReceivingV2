@@ -1,11 +1,11 @@
-console.log("RRPD replacement loaded");
+console.log("RRPD corrected V2 loaded");
 
-/* ------------------- Constants / Storage Keys ------------------- */
+/* ================== Storage keys ================== */
 const KEYS = {
-  CSV_LAST: "rrpd_csv_last_summary_v1",
-  MANUAL: "rrpd_manual_counts_v1",
-  CARRIERS: "rrpd_carriers_v1",
-  LOOSE: "rrpd_loose_parts_v1"
+  CSV_LAST: "rrpd_csv_last_summary_v2",
+  MANUAL: "rrpd_manual_counts_v2",
+  CARRIERS: "rrpd_carriers_v2",
+  LOOSE: "rrpd_loose_parts_v2"
 };
 
 const statusEl = document.getElementById("status_text");
@@ -13,30 +13,48 @@ const updatedSmall = document.getElementById("updated_small");
 
 let charts = {}; // Chart.js instances
 
-/* ------------------- Time helpers (UTC-safe) ------------------- */
-function toLocalInputValueFromNow() {
+/* ================== Small helpers ================== */
+function setText(id, txt) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = String(txt);
+}
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveJSON(key, obj) {
+  localStorage.setItem(key, JSON.stringify(obj));
+}
+function uid() {
+  return (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(16).slice(2) + Date.now().toString(16)));
+}
+
+/* ================== Time helpers ================== */
+function toLocalInputNow() {
   const d = new Date();
   const pad = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function localInputToISO(dtLocal) {
+function localToISO(dtLocal) {
   if (!dtLocal) return null;
-  const ms = Date.parse(dtLocal); // interpreted as local time of the computer doing entry
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toISOString(); // stored as UTC ISO (consistent worldwide)
+  const ms = Date.parse(dtLocal);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
-function isoToUTCDisplay(iso) {
+function isoDisplay(iso) {
   if (!iso) return "";
-  // show explicit UTC to avoid confusion
   const d = new Date(iso);
-  return d.toISOString().replace("T", " ").replace(".000Z", "Z");
+  // Display in local machine time, but with full timestamp clarity
+  return d.toLocaleString();
 }
 
-/* ------------------- Tabs ------------------- */
+/* ================== Tabs ================== */
 function wireTabs() {
   const tabButtons = document.querySelectorAll(".tab-btn");
   const tabs = document.querySelectorAll(".tab");
-
   tabButtons.forEach(btn => {
     btn.addEventListener("click", () => {
       const target = btn.dataset.target;
@@ -48,11 +66,19 @@ function wireTabs() {
   });
 }
 
-/* ------------------- Chart helpers ------------------- */
+/* ================== Charts (multi-color) ================== */
+const PALETTE = [
+  "#00bfff","#36cfc9","#ffd666","#ff7875",
+  "#9254de","#5cdbd3","#69c0ff","#ffc53d",
+  "#b37feb","#ff9c6e","#73d13d","#ffd6e7"
+];
+
 function makeChart(id, type, labels, values, label) {
   const canvas = document.getElementById(id);
   if (!canvas) return;
   if (charts[id]) charts[id].destroy();
+
+  const colors = labels.map((_, i) => PALETTE[i % PALETTE.length]);
 
   charts[id] = new Chart(canvas, {
     type,
@@ -61,10 +87,8 @@ function makeChart(id, type, labels, values, label) {
       datasets: [{
         label,
         data: values,
-        backgroundColor: type === "doughnut"
-          ? ["#00bfff","#36cfc9","#ffd666","#ff7875","#9254de","#5cdbd3","#69c0ff","#ffc53d","#b37feb"]
-          : "#00bfff",
-        borderColor: type === "doughnut" ? "#001529" : "#007acc",
+        backgroundColor: colors,
+        borderColor: "#001529",
         borderWidth: 1
       }]
     },
@@ -83,21 +107,27 @@ function makeChart(id, type, labels, values, label) {
   });
 }
 
-/* ------------------- CSV parsing / counting ------------------- */
-function qtyFromPart(partStr) {
-  const s = String(partStr || "").toLowerCase();
+function makeMultiDatasetBar(id, labels, datasets) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  if (charts[id]) charts[id].destroy();
 
-  // "...x2" or "... x 2"
-  let m = s.match(/\bx\s*(\d+)\b/);
-  if (m) return Math.max(1, parseInt(m[1], 10));
-
-  // "2x" or "2 x"
-  m = s.match(/\b(\d+)\s*x\b/);
-  if (m) return Math.max(1, parseInt(m[1], 10));
-
-  return 1;
+  charts[id] = new Chart(canvas, {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#f5f8ff", font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: "#f5f8ff" } },
+        y: { beginAtZero: true, ticks: { color: "#f5f8ff" } }
+      }
+    }
+  });
 }
 
+/* ================== CSV parsing ================== */
 function parseCSV(text) {
   const rows = [];
   let row = [], cur = "", inQuotes = false;
@@ -110,7 +140,6 @@ function parseCSV(text) {
 
     if (!inQuotes && c === ",") { row.push(cur); cur = ""; continue; }
     if (!inQuotes && c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; continue; }
-
     if (c !== "\r") cur += c;
   }
   if (cur.length || row.length) { row.push(cur); rows.push(row); }
@@ -118,12 +147,41 @@ function parseCSV(text) {
   const headers = (rows.shift() || []).map(h => h.trim());
   return rows
     .filter(r => r.some(x => String(x).trim() !== ""))
-    .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ""])));
+    .map(r => Object.fromEntries(headers.map((h, idx) => [h, r[idx] ?? ""])));
 }
 
 function normalizeDesc(desc) {
   const d = String(desc || "").trim();
   return d ? d : "Unclassified";
+}
+
+/**
+ * PERFECT multiplier parser:
+ * - Only counts multipliers when they look like prefix/suffix multipliers with a small N.
+ * - Avoids treating part numbers like "x2020" as 2020 parts.
+ */
+function qtyFromPart(partStr) {
+  const s = String(partStr || "").trim();
+  const low = s.toLowerCase();
+
+  const MIN = 2;
+  const MAX = 20; // safe. If you want stricter, set MAX = 10 or 6.
+
+  // Suffix: "...x2" "... x 2" with a real preceding character
+  let m = low.match(/([a-z0-9])\s*x\s*(\d{1,2})\b/);
+  if (m) {
+    const n = parseInt(m[2], 10);
+    if (n >= MIN && n <= MAX) return n;
+  }
+
+  // Prefix: "2x..." "2 x ..." with a real following character
+  m = low.match(/\b(\d{1,2})\s*x\s*([a-z0-9])/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= MIN && n <= MAX) return n;
+  }
+
+  return 1;
 }
 
 function analyzeCSV(records) {
@@ -133,10 +191,10 @@ function analyzeCSV(records) {
 
   const totalsByTracking = new Map(); // tracking -> parts
   const totalsByDesc = new Map();     // desc -> parts
-  const rowsByDesc = new Map();       // desc -> rows counted
+  const rowsByDesc = new Map();       // desc -> rows
   const breakdown = new Map();        // tracking -> (desc -> {parts, rows})
+  const validation = new Map();       // reason -> count
 
-  const validation = new Map(); // reason -> count
   const bump = (k) => validation.set(k, (validation.get(k) || 0) + 1);
 
   let counted = 0;
@@ -148,10 +206,7 @@ function analyzeCSV(records) {
     const descLower = descRaw.toLowerCase();
 
     if (!tracking || !part) { bump("Missing Track/Part"); continue; }
-
     if (descLower.includes("return label")) { bump("Return Label"); continue; }
-
-    // safety: don't count a row where part == tracking
     if (part === tracking) { bump("Part == Track (safety)"); continue; }
 
     const qty = qtyFromPart(part);
@@ -171,10 +226,12 @@ function analyzeCSV(records) {
     counted++;
   }
 
-  const skipped = [...validation.values()].reduce((a,b)=>a+b,0);
-  const totalParts = [...totalsByTracking.values()].reduce((a,b)=>a+b,0);
+  const validationArr = [...validation.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a,b) => b.count - a.count);
 
-  // build arrays for rendering/export
+  const skipped = validationArr.reduce((a,x)=>a+x.count,0);
+
   const trackingArr = [...totalsByTracking.entries()]
     .map(([tracking, parts]) => ({ tracking, parts }))
     .sort((a,b)=>a.tracking.localeCompare(b.tracking));
@@ -191,32 +248,42 @@ function analyzeCSV(records) {
   }
   breakdownArr.sort((a,b)=>a.tracking.localeCompare(b.tracking) || b.parts - a.parts);
 
-  const validationArr = [...validation.entries()]
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a,b)=>b.count - a.count);
+  const totalParts = trackingArr.reduce((sum, r) => sum + r.parts, 0);
 
   return {
+    updatedISO: new Date().toISOString(),
     counted, skipped,
     trackings: trackingArr.length,
     totalParts,
-    trackingArr, descArr, breakdownArr, validationArr,
-    updatedISO: new Date().toISOString()
+    trackingArr,
+    descArr,
+    breakdownArr,
+    validationArr
   };
 }
 
-/* ------------------- CSV Dashboard render ------------------- */
-function setText(id, txt) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = String(txt);
+/* ================== CSV render + export ================== */
+function downloadCSV(filename, rows) {
+  const esc = (v) => {
+    const s = String(v ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+  const csv = rows.map(r => r.map(esc).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
-function renderCSVSummary(summary) {
+function renderCSV(summary) {
   setText("kpi_counted", summary.counted);
   setText("kpi_skipped", summary.skipped);
   setText("kpi_trackings", summary.trackings);
   setText("kpi_parts", summary.totalParts);
 
-  // validation table
+  // Validation table
   const vbody = document.querySelector("#table_validation tbody");
   vbody.innerHTML = "";
   if (!summary.validationArr.length) {
@@ -228,149 +295,141 @@ function renderCSVSummary(summary) {
       vbody.appendChild(tr);
     });
   }
-  const vNote = document.getElementById("validation_note");
-  if (vNote) vNote.textContent = `Last run (UTC): ${isoToUTCDisplay(summary.updatedISO)}`;
+  const note = document.getElementById("csv_run_note");
+  if (note) note.textContent = `Last run: ${isoDisplay(summary.updatedISO)}`;
 
-  // tables
-  const tbodyDesc = document.querySelector("#table_desc tbody");
-  tbodyDesc.innerHTML = "";
+  // Totals by description
+  const dbody = document.querySelector("#table_desc tbody");
+  dbody.innerHTML = "";
   summary.descArr.forEach(r => {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.desc}</td><td>${r.parts}</td><td>${r.rows}</td>`;
-    tbodyDesc.appendChild(tr);
+    dbody.appendChild(tr);
   });
 
-  const tbodyTrack = document.querySelector("#table_tracking tbody");
-  tbodyTrack.innerHTML = "";
+  // Totals by tracking
+  const tbody = document.querySelector("#table_tracking tbody");
+  tbody.innerHTML = "";
   summary.trackingArr.forEach(r => {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.tracking}</td><td>${r.parts}</td>`;
-    tbodyTrack.appendChild(tr);
+    tbody.appendChild(tr);
   });
 
-  const tbodyBreak = document.querySelector("#table_breakdown tbody");
-  tbodyBreak.innerHTML = "";
-  summary.breakdownArr.forEach(r => {
+  // Breakdown table (limit 250 for page length)
+  const bbody = document.querySelector("#table_breakdown tbody");
+  bbody.innerHTML = "";
+  summary.breakdownArr.slice(0, 250).forEach(r => {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.tracking}</td><td>${r.desc}</td><td>${r.parts}</td><td>${r.rows}</td>`;
-    tbodyBreak.appendChild(tr);
+    bbody.appendChild(tr);
   });
 
-  // charts: desc pie + bar
-  const labels = summary.descArr.map(d => d.desc);
-  const values = summary.descArr.map(d => d.parts);
-
+  // Charts
+  const labels = summary.descArr.map(x => x.desc);
+  const values = summary.descArr.map(x => x.parts);
   makeChart("chart_desc_pie", "doughnut", labels, values, "Parts");
   makeChart("chart_desc_bar", "bar", labels, values, "Parts");
 }
 
-function downloadCSV(filename, rows) {
-  const escapeCell = (v) => {
-    const s = String(v ?? "");
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const csv = rows.map(r => r.map(escapeCell).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
+function exportCSVSummary(summary) {
+  const rows = [];
+  rows.push(["RunAt", summary.updatedISO]);
+  rows.push([""]);
+  rows.push(["Totals by Description"]);
+  rows.push(["Description","Parts","Rows"]);
+  summary.descArr.forEach(r => rows.push([r.desc, r.parts, r.rows]));
+  rows.push([""]);
+  rows.push(["Totals by Tracking"]);
+  rows.push(["Tracking","Parts"]);
+  summary.trackingArr.forEach(r => rows.push([r.tracking, r.parts]));
+  rows.push([""]);
+  rows.push(["Breakdown by Tracking + Description"]);
+  rows.push(["Tracking","Description","Parts","Rows"]);
+  summary.breakdownArr.forEach(r => rows.push([r.tracking, r.desc, r.parts, r.rows]));
+  rows.push([""]);
+  rows.push(["Validation / Skips"]);
+  rows.push(["Reason","Count"]);
+  summary.validationArr.forEach(r => rows.push([r.reason, r.count]));
+
+  downloadCSV("rrpd_csv_summary.csv", rows);
 }
 
-/* ------------------- Manual Counts ------------------- */
-function getNum(id) {
-  const el = document.getElementById(id);
-  const v = Number(el?.value ?? 0);
+/* ================== Manual Counts ================== */
+function n(id) {
+  const v = Number(document.getElementById(id)?.value ?? 0);
   return Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
 }
-function setNum(id, n) {
+function setN(id, val) {
   const el = document.getElementById(id);
-  if (el) el.value = String(Number.isFinite(n) ? n : 0);
+  if (el) el.value = String(val ?? 0);
 }
-function loadJSON(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key) || ""); }
-  catch { return fallback; }
-}
-function saveJSON(key, obj) {
-  localStorage.setItem(key, JSON.stringify(obj));
+function ratioText(a, b) {
+  if (a + b === 0) return "N/A";
+  if (b === 0) return `${a}:0 (100% / 0%)`;
+  if (a === 0) return `0:${b} (0% / 100%)`;
+  const pctA = Math.round((a / (a + b)) * 100);
+  const pctB = 100 - pctA;
+  return `${a}:${b} (${pctA}% / ${pctB}%)`;
 }
 
-function manualReadInputs() {
+function manualRead() {
   return {
-    goodRacks: getNum("m_good_racks"),
-    coreRacks: getNum("m_core_racks"),
-    goodERacks: getNum("m_good_e_racks"),
-    coreERacks: getNum("m_core_e_racks"),
-    goodAxles: getNum("m_good_axles"),
-    usedAxles: getNum("m_used_axles"),
-    goodDS: getNum("m_good_ds"),
-    usedDS: getNum("m_used_ds"),
-    goodGB: getNum("m_good_gb"),
-    usedGB: getNum("m_used_gb"),
+    goodRacks: n("m_good_racks"),
+    coreRacks: n("m_core_racks"),
+    goodERacks: n("m_good_eracks"),
+    coreERacks: n("m_core_eracks"),
+    goodAxles: n("m_good_axles"),
+    usedAxles: n("m_used_axles"),
+    goodDS: n("m_good_ds"),
+    usedDS: n("m_used_ds"),
+    goodGB: n("m_good_gb"),
+    usedGB: n("m_used_gb")
   };
 }
 
-function safeRatio(a, b) {
-  if (b === 0) return "N/A";
-  return `${a}:${b} (${Math.round((a/(a+b))*100)}% / ${Math.round((b/(a+b))*100)}%)`;
-}
+function manualRender(state) {
+  const inputs = state?.inputs;
+  if (!inputs) return;
 
-function renderManual() {
-  const state = loadJSON(KEYS.MANUAL, null);
-  if (!state) return;
-
-  // restore inputs
-  setNum("m_good_racks", state.inputs.goodRacks);
-  setNum("m_core_racks", state.inputs.coreRacks);
-  setNum("m_good_e_racks", state.inputs.goodERacks);
-  setNum("m_core_e_racks", state.inputs.coreERacks);
-  setNum("m_good_axles", state.inputs.goodAxles);
-  setNum("m_used_axles", state.inputs.usedAxles);
-  setNum("m_good_ds", state.inputs.goodDS);
-  setNum("m_used_ds", state.inputs.usedDS);
-  setNum("m_good_gb", state.inputs.goodGB);
-  setNum("m_used_gb", state.inputs.usedGB);
-
-  const inputs = state.inputs;
-
+  // Totals
   const totalRacks = inputs.goodRacks + inputs.coreRacks + inputs.goodERacks + inputs.coreERacks;
   const totalAxles = inputs.goodAxles + inputs.usedAxles;
   const totalDS = inputs.goodDS + inputs.usedDS;
   const totalGB = inputs.goodGB + inputs.usedGB;
   const grand = totalRacks + totalAxles + totalDS + totalGB;
 
+  // Conditions totals (manual)
   const goodTotal = inputs.goodRacks + inputs.goodERacks + inputs.goodAxles + inputs.goodDS + inputs.goodGB;
-  const coreTotal = inputs.coreRacks + inputs.coreERacks; // core only for racks in your list
+  const coreTotal = inputs.coreRacks + inputs.coreERacks;
   const usedTotal = inputs.usedAxles + inputs.usedDS + inputs.usedGB;
 
-  const summary = [
+  const summaryRows = [
     ["Total Racks", totalRacks],
     ["Total Axles", totalAxles],
     ["Total Drive Shafts", totalDS],
     ["Total Gear boxes", totalGB],
     ["Grand Total", grand],
-    ["Good Racks : Core Racks", safeRatio(inputs.goodRacks, inputs.coreRacks)],
-    ["Good Electric Racks : Core Electric Racks", safeRatio(inputs.goodERacks, inputs.coreERacks)],
-    ["Good Axles : Used Axles", safeRatio(inputs.goodAxles, inputs.usedAxles)],
-    ["Good Drive Shafts : Used Drive Shafts", safeRatio(inputs.goodDS, inputs.usedDS)],
-    ["Good Gear boxes : Used Gear boxes", safeRatio(inputs.goodGB, inputs.usedGB)],
-    ["Saved at (UTC)", isoToUTCDisplay(state.savedAtISO)]
+    ["Good Racks : Core Racks", ratioText(inputs.goodRacks, inputs.coreRacks)],
+    ["Good Electric Racks : Core Electric Racks", ratioText(inputs.goodERacks, inputs.coreERacks)],
+    ["Good Axles : Used Axles", ratioText(inputs.goodAxles, inputs.usedAxles)],
+    ["Good Drive Shafts : Used Drive Shafts", ratioText(inputs.goodDS, inputs.usedDS)],
+    ["Good Gear boxes : Used Gear boxes", ratioText(inputs.goodGB, inputs.usedGB)],
+    ["Saved", isoDisplay(state.savedAtISO)]
   ];
 
   const tbody = document.querySelector("#table_manual_summary tbody");
   tbody.innerHTML = "";
-  summary.forEach(([k, v]) => {
+  summaryRows.forEach(([k,v]) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${k}</td><td>${v}</td>`;
     tbody.appendChild(tr);
   });
 
-  const savedAt = document.getElementById("manual_saved_at");
-  if (savedAt) savedAt.textContent = `Saved timestamp (UTC): ${isoToUTCDisplay(state.savedAtISO)}`;
+  const note = document.getElementById("manual_saved_note");
+  if (note) note.textContent = `Saved: ${isoDisplay(state.savedAtISO)}`;
 
-  // charts
+  // Charts
   makeChart("chart_manual_totals", "bar",
     ["Racks","Axles","Drive Shafts","Gear boxes"],
     [totalRacks,totalAxles,totalDS,totalGB],
@@ -381,57 +440,37 @@ function renderManual() {
     [goodTotal, usedTotal, coreTotal],
     "Counts");
 
-  // split bar (stack-ish but simple)
-  // We'll render as multiple datasets by creating separate chart instance manually:
-  const canvas = document.getElementById("chart_manual_split");
-  if (canvas) {
-    if (charts["chart_manual_split"]) charts["chart_manual_split"].destroy();
-    charts["chart_manual_split"] = new Chart(canvas, {
-      type: "bar",
-      data: {
-        labels: ["Racks","Axles","Drive Shafts","Gear boxes"],
-        datasets: [
-          { label: "Good", data: [inputs.goodRacks+inputs.goodERacks, inputs.goodAxles, inputs.goodDS, inputs.goodGB], backgroundColor: "#00bfff" },
-          { label: "Used", data: [0, inputs.usedAxles, inputs.usedDS, inputs.usedGB], backgroundColor: "#ffd666" },
-          { label: "Core", data: [inputs.coreRacks+inputs.coreERacks, 0, 0, 0], backgroundColor: "#ff7875" }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: "#f5f8ff", font: { size: 11 } } } },
-        scales: {
-          x: { ticks: { color: "#f5f8ff" } },
-          y: { beginAtZero: true, ticks: { color: "#f5f8ff" } }
-        }
-      }
-    });
-  }
+  makeMultiDatasetBar("chart_manual_split",
+    ["Racks","Axles","Drive Shafts","Gear boxes"],
+    [
+      { label:"Good", data:[inputs.goodRacks + inputs.goodERacks, inputs.goodAxles, inputs.goodDS, inputs.goodGB], backgroundColor: "#00bfff" },
+      { label:"Used", data:[0, inputs.usedAxles, inputs.usedDS, inputs.usedGB], backgroundColor: "#ffd666" },
+      { label:"Core", data:[inputs.coreRacks + inputs.coreERacks, 0, 0, 0], backgroundColor: "#ff7875" }
+    ]
+  );
 }
 
-/* ------------------- Carriers ------------------- */
-function carrierLoad() { return loadJSON(KEYS.CARRIERS, []); }
-function carrierSave(list) { saveJSON(KEYS.CARRIERS, list); }
+/* ================== Carriers ================== */
+function carriersLoad() { return loadJSON(KEYS.CARRIERS, []); }
+function carriersSave(list) { saveJSON(KEYS.CARRIERS, list); }
 
-function renderCarriers() {
-  const list = carrierLoad();
+function carriersRender() {
+  const list = carriersLoad();
   const tbody = document.querySelector("#table_carriers tbody");
   tbody.innerHTML = "";
 
-  // aggregate for chart
-  const totals = new Map(); // carrier -> qty
-  list.forEach(item => {
-    totals.set(item.name, (totals.get(item.name) || 0) + item.qty);
-  });
+  const totals = new Map();
 
   list.forEach(item => {
+    totals.set(item.name, (totals.get(item.name) || 0) + item.qty);
+
     const tr = document.createElement("tr");
     const status = item.completedISO ? "Completed" : "Open";
     tr.innerHTML = `
       <td>${item.name}</td>
       <td>${item.qty}</td>
-      <td>${isoToUTCDisplay(item.receivedISO)}</td>
-      <td>${isoToUTCDisplay(item.completedISO)}</td>
+      <td>${isoDisplay(item.receivedISO)}</td>
+      <td>${isoDisplay(item.completedISO)}</td>
       <td>${status}</td>
       <td></td>
     `;
@@ -440,11 +479,12 @@ function renderCarriers() {
     del.className = "btn small danger";
     del.textContent = "Delete";
     del.addEventListener("click", () => {
-      const next = carrierLoad().filter(x => x.id !== item.id);
-      carrierSave(next);
-      renderCarriers();
+      const next = carriersLoad().filter(x => x.id !== item.id);
+      carriersSave(next);
+      carriersRender();
     });
     td.appendChild(del);
+
     tbody.appendChild(tr);
   });
 
@@ -453,11 +493,11 @@ function renderCarriers() {
   makeChart("chart_carriers", "bar", labels, values, "Received Qty");
 }
 
-/* ------------------- Loose parts ------------------- */
+/* ================== Loose parts ================== */
 function looseLoad() { return loadJSON(KEYS.LOOSE, []); }
 function looseSave(list) { saveJSON(KEYS.LOOSE, list); }
 
-function renderLoose() {
+function looseRender() {
   const list = looseLoad();
   const tbody = document.querySelector("#table_loose tbody");
   tbody.innerHTML = "";
@@ -470,7 +510,7 @@ function renderLoose() {
       <td>${item.part}</td>
       <td>${item.cond}</td>
       <td>${item.qty}</td>
-      <td>${isoToUTCDisplay(item.dtISO)}</td>
+      <td>${isoDisplay(item.dtISO)}</td>
       <td></td>
     `;
     const td = tr.lastElementChild;
@@ -480,27 +520,27 @@ function renderLoose() {
     del.addEventListener("click", () => {
       const next = looseLoad().filter(x => x.id !== item.id);
       looseSave(next);
-      renderLoose();
+      looseRender();
     });
     td.appendChild(del);
+
     tbody.appendChild(tr);
   });
 
   setText("loose_total", total);
 }
 
-/* ------------------- Export: All (CSV) ------------------- */
+/* ================== Export All ================== */
 function exportAll() {
   const csvSummary = loadJSON(KEYS.CSV_LAST, null);
   const manual = loadJSON(KEYS.MANUAL, null);
-  const carriers = carrierLoad();
+  const carriers = carriersLoad();
   const loose = looseLoad();
 
   const rows = [];
   rows.push(["SECTION","A","B","C","D","E"]);
 
-  // CSV summary
-  rows.push(["CSV Summary (UTC run time)", csvSummary?.updatedISO || "", "", "", "", ""]);
+  rows.push(["CSV Summary", "RunAt", csvSummary?.updatedISO || "", "", "", ""]);
   rows.push(["Totals by Description", "Description", "Parts", "Rows", "", ""]);
   (csvSummary?.descArr || []).forEach(r => rows.push(["", r.desc, r.parts, r.rows, "", ""]));
 
@@ -509,225 +549,219 @@ function exportAll() {
   (csvSummary?.trackingArr || []).forEach(r => rows.push(["", r.tracking, r.parts, "", "", ""]));
 
   rows.push(["", "", "", "", "", ""]);
-  rows.push(["Breakdown by Tracking+Description", "Tracking", "Description", "Parts", "Rows", ""]);
+  rows.push(["Breakdown", "Tracking", "Description", "Parts", "Rows", ""]);
   (csvSummary?.breakdownArr || []).forEach(r => rows.push(["", r.tracking, r.desc, r.parts, r.rows, ""]));
 
-  // Manual
   rows.push(["", "", "", "", "", ""]);
-  rows.push(["Manual Counts", "SavedAtISO(UTC)", manual?.savedAtISO || "", "", "", ""]);
+  rows.push(["Validation / Skips", "Reason", "Count", "", "", ""]);
+  (csvSummary?.validationArr || []).forEach(r => rows.push(["", r.reason, r.count, "", "", ""]));
+
+  rows.push(["", "", "", "", "", ""]);
+  rows.push(["Manual Counts", "SavedAt", manual?.savedAtISO || "", "", "", ""]);
   if (manual?.inputs) {
     Object.entries(manual.inputs).forEach(([k,v]) => rows.push(["", k, v, "", "", ""]));
   }
 
-  // Carriers
   rows.push(["", "", "", "", "", ""]);
   rows.push(["Carriers", "Carrier", "Qty", "ReceivedISO", "CompletedISO", ""]);
   carriers.forEach(c => rows.push(["", c.name, c.qty, c.receivedISO || "", c.completedISO || "", ""]));
 
-  // Loose
   rows.push(["", "", "", "", "", ""]);
-  rows.push(["Loose Parts", "Part", "Condition", "Qty", "DateISO(UTC)", ""]);
+  rows.push(["Loose Parts", "Part", "Condition", "Qty", "DateISO", ""]);
   loose.forEach(l => rows.push(["", l.part, l.cond, l.qty, l.dtISO, ""]));
 
   downloadCSV("rrpd_all_export.csv", rows);
   statusEl.textContent = "Exported rrpd_all_export.csv";
 }
 
-/* ------------------- Wire up UI ------------------- */
-async function init() {
+/* ================== Init / Wire UI ================== */
+function init() {
   wireTabs();
 
-  // CSV upload
+  // CSV
   const csvFile = document.getElementById("csv_file");
   const csvExportBtn = document.getElementById("csv_export_btn");
   const csvClearBtn = document.getElementById("csv_clear_btn");
 
-  csvFile.addEventListener("change", async () => {
+  csvFile?.addEventListener("change", async () => {
     const file = csvFile.files?.[0];
     if (!file) return;
+
     try {
       statusEl.textContent = "Reading CSV…";
       const text = await file.text();
       const records = parseCSV(text);
       const summary = analyzeCSV(records);
 
-      // store for exports
-      saveJSON(KEYS.CSV_LAST, {
-        ...summary,
-        // keep only what we need for export (arrays are already small-ish)
-        // NOTE: if huge CSVs, we still store only aggregates
-      });
+      saveJSON(KEYS.CSV_LAST, summary);
+      renderCSV(summary);
 
-      renderCSVSummary(summary);
-
-      const nowUTC = isoToUTCDisplay(summary.updatedISO);
-      statusEl.textContent = `CSV loaded (UTC): ${nowUTC}`;
-      if (updatedSmall) updatedSmall.textContent = `Last updated (UTC): ${nowUTC}`;
+      statusEl.textContent = "CSV loaded";
+      if (updatedSmall) updatedSmall.textContent = `Last updated: ${isoDisplay(summary.updatedISO)}`;
     } catch (e) {
       console.error(e);
       statusEl.textContent = "CSV error — check console";
     }
   });
 
-  csvExportBtn.addEventListener("click", () => {
+  csvExportBtn?.addEventListener("click", () => {
     const summary = loadJSON(KEYS.CSV_LAST, null);
     if (!summary) { statusEl.textContent = "Upload a CSV first"; return; }
-
-    const rows = [];
-    rows.push(["RunAtISO(UTC)", summary.updatedISO]);
-    rows.push([""]);
-    rows.push(["Totals by Description"]);
-    rows.push(["Description","Parts","Rows"]);
-    (summary.descArr || []).forEach(r => rows.push([r.desc, r.parts, r.rows]));
-    rows.push([""]);
-    rows.push(["Totals by Tracking"]);
-    rows.push(["Tracking","Parts"]);
-    (summary.trackingArr || []).forEach(r => rows.push([r.tracking, r.parts]));
-    rows.push([""]);
-    rows.push(["Breakdown by Tracking+Description"]);
-    rows.push(["Tracking","Description","Parts","Rows"]);
-    (summary.breakdownArr || []).forEach(r => rows.push([r.tracking, r.desc, r.parts, r.rows]));
-
-    downloadCSV("rrpd_csv_summary.csv", rows);
+    exportCSVSummary(summary);
     statusEl.textContent = "Exported rrpd_csv_summary.csv";
   });
 
-  csvClearBtn.addEventListener("click", () => {
+  csvClearBtn?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.CSV_LAST);
     statusEl.textContent = "CSV cleared";
-    // quick UI reset
-    renderCSVSummary({counted:0,skipped:0,trackings:0,totalParts:0,descArr:[],trackingArr:[],breakdownArr:[],validationArr:[],updatedISO:new Date().toISOString()});
+    renderCSV({
+      updatedISO: new Date().toISOString(),
+      counted: 0, skipped: 0, trackings: 0, totalParts: 0,
+      trackingArr: [], descArr: [], breakdownArr: [], validationArr: []
+    });
   });
 
-  // Manual buttons
-  const manualDT = document.getElementById("manual_timestamp");
+  // Manual
+  const manualDT = document.getElementById("manual_dt");
   const manualNow = document.getElementById("manual_now");
   const manualSave = document.getElementById("manual_save");
-  const manualReset = document.getElementById("manual_reset");
+  const manualClear = document.getElementById("manual_clear");
 
-  if (manualDT) manualDT.value = toLocalInputValueFromNow();
-  manualNow.addEventListener("click", () => manualDT.value = toLocalInputValueFromNow());
+  if (manualDT) manualDT.value = toLocalInputNow();
+  manualNow?.addEventListener("click", () => { if (manualDT) manualDT.value = toLocalInputNow(); });
 
-  manualSave.addEventListener("click", () => {
-    const inputs = manualReadInputs();
-    const iso = localInputToISO(manualDT.value) || new Date().toISOString();
-    saveJSON(KEYS.MANUAL, { inputs, savedAtISO: iso });
-    statusEl.textContent = `Manual saved (UTC): ${isoToUTCDisplay(iso)}`;
-    renderManual();
+  manualSave?.addEventListener("click", () => {
+    const inputs = manualRead();
+    const savedAtISO = localToISO(manualDT?.value) || new Date().toISOString();
+    const state = { inputs, savedAtISO };
+    saveJSON(KEYS.MANUAL, state);
+    statusEl.textContent = "Manual saved";
+    manualRender(state);
   });
 
-  manualReset.addEventListener("click", () => {
+  manualClear?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.MANUAL);
-    ["m_good_racks","m_core_racks","m_good_e_racks","m_core_e_racks","m_good_axles","m_used_axles","m_good_ds","m_used_ds","m_good_gb","m_used_gb"]
-      .forEach(id => setNum(id, 0));
-    statusEl.textContent = "Manual reset";
-    const tbody = document.querySelector("#table_manual_summary tbody");
-    if (tbody) tbody.innerHTML = "";
+    [
+      "m_good_racks","m_core_racks","m_good_eracks","m_core_eracks",
+      "m_good_axles","m_used_axles","m_good_ds","m_used_ds",
+      "m_good_gb","m_used_gb"
+    ].forEach(id => setN(id, 0));
+    document.querySelector("#table_manual_summary tbody").innerHTML = "";
+    document.getElementById("manual_saved_note").textContent = "";
+    statusEl.textContent = "Manual cleared";
   });
 
-  // Carrier buttons
-  document.getElementById("carrier_received_now").addEventListener("click", () => {
-    document.getElementById("carrier_received").value = toLocalInputValueFromNow();
-  });
-  document.getElementById("carrier_completed_now").addEventListener("click", () => {
-    document.getElementById("carrier_completed").value = toLocalInputValueFromNow();
-  });
+  // Carriers
+  const receivedNow = document.getElementById("carrier_received_now");
+  const completedNow = document.getElementById("carrier_completed_now");
+  receivedNow?.addEventListener("click", () => { document.getElementById("carrier_received").value = toLocalInputNow(); });
+  completedNow?.addEventListener("click", () => { document.getElementById("carrier_completed").value = toLocalInputNow(); });
 
-  document.getElementById("carrier_add").addEventListener("click", () => {
+  document.getElementById("carrier_add")?.addEventListener("click", () => {
     const name = String(document.getElementById("carrier_name").value || "").trim();
     const qty = Math.max(0, Math.floor(Number(document.getElementById("carrier_qty").value || 0)));
-    const receivedISO = localInputToISO(document.getElementById("carrier_received").value);
-    const completedISO = localInputToISO(document.getElementById("carrier_completed").value);
+    const receivedISO = localToISO(document.getElementById("carrier_received").value) || new Date().toISOString();
+    const completedISO = localToISO(document.getElementById("carrier_completed").value) || "";
 
-    if (!name || !Number.isFinite(qty)) { statusEl.textContent = "Carrier name + qty required"; return; }
+    if (!name) { statusEl.textContent = "Carrier name required"; return; }
+    if (!Number.isFinite(qty)) { statusEl.textContent = "Carrier qty required"; return; }
 
-    const list = carrierLoad();
-    list.push({
-      id: (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(16).slice(2) + Date.now().toString(16))),
-      name,
-      qty,
-      receivedISO: receivedISO || new Date().toISOString(),
-      completedISO: completedISO || ""
-    });
-    carrierSave(list);
+    const list = carriersLoad();
+    list.push({ id: uid(), name, qty, receivedISO, completedISO });
+    carriersSave(list);
 
-    // clear inputs
     document.getElementById("carrier_name").value = "";
     document.getElementById("carrier_qty").value = "";
     document.getElementById("carrier_received").value = "";
     document.getElementById("carrier_completed").value = "";
 
-    statusEl.textContent = "Carrier entry added";
-    renderCarriers();
+    carriersRender();
+    statusEl.textContent = "Carrier added";
   });
 
-  document.getElementById("carrier_export").addEventListener("click", () => {
-    const list = carrierLoad();
-    const rows = [["Carrier","Qty","ReceivedISO(UTC)","CompletedISO(UTC)"]];
+  document.getElementById("carrier_export")?.addEventListener("click", () => {
+    const list = carriersLoad();
+    const rows = [["Carrier","Qty","ReceivedISO","CompletedISO"]];
     list.forEach(c => rows.push([c.name, c.qty, c.receivedISO || "", c.completedISO || ""]));
     downloadCSV("rrpd_carriers.csv", rows);
     statusEl.textContent = "Exported rrpd_carriers.csv";
   });
 
-  document.getElementById("carrier_clear").addEventListener("click", () => {
+  document.getElementById("carrier_clear")?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.CARRIERS);
+    carriersRender();
     statusEl.textContent = "Carriers cleared";
-    renderCarriers();
   });
 
-  // Loose parts buttons
+  // Loose
   const looseDT = document.getElementById("loose_dt");
-  if (looseDT) looseDT.value = toLocalInputValueFromNow();
-  document.getElementById("loose_now").addEventListener("click", () => {
-    document.getElementById("loose_dt").value = toLocalInputValueFromNow();
+  if (looseDT) looseDT.value = toLocalInputNow();
+
+  document.getElementById("loose_now")?.addEventListener("click", () => {
+    document.getElementById("loose_dt").value = toLocalInputNow();
   });
 
-  document.getElementById("loose_add").addEventListener("click", () => {
+  document.getElementById("loose_add")?.addEventListener("click", () => {
     const part = String(document.getElementById("loose_part").value || "").trim();
     const cond = String(document.getElementById("loose_cond").value || "Good");
-    const dtISO = localInputToISO(document.getElementById("loose_dt").value) || new Date().toISOString();
-    if (!part) { statusEl.textContent = "Loose part number required"; return; }
+    const dtISO = localToISO(document.getElementById("loose_dt").value) || new Date().toISOString();
+    if (!part) { statusEl.textContent = "Loose part required"; return; }
 
     const qty = qtyFromPart(part);
     const list = looseLoad();
-    list.push({
-      id: (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(16).slice(2) + Date.now().toString(16))),
-      part, cond, qty, dtISO
-    });
+    list.push({ id: uid(), part, cond, qty, dtISO });
     looseSave(list);
 
     document.getElementById("loose_part").value = "";
+    looseRender();
     statusEl.textContent = "Loose part added";
-    renderLoose();
   });
 
-  document.getElementById("loose_export").addEventListener("click", () => {
+  document.getElementById("loose_export")?.addEventListener("click", () => {
     const list = looseLoad();
-    const rows = [["Part","Condition","Qty","DateISO(UTC)"]];
+    const rows = [["Part","Condition","Qty","DateISO"]];
     list.forEach(l => rows.push([l.part, l.cond, l.qty, l.dtISO]));
     downloadCSV("rrpd_loose_parts.csv", rows);
     statusEl.textContent = "Exported rrpd_loose_parts.csv";
   });
 
-  document.getElementById("loose_clear").addEventListener("click", () => {
+  document.getElementById("loose_clear")?.addEventListener("click", () => {
     localStorage.removeItem(KEYS.LOOSE);
+    looseRender();
     statusEl.textContent = "Loose parts cleared";
-    renderLoose();
   });
 
-  // Export all
-  document.getElementById("export_all_btn").addEventListener("click", exportAll);
+  // Export All
+  document.getElementById("export_all_btn")?.addEventListener("click", exportAll);
 
-  // initial renders from saved state
+  // Initial render from saved states
   const savedCSV = loadJSON(KEYS.CSV_LAST, null);
-  if (savedCSV) renderCSVSummary(savedCSV);
-  const savedManual = loadJSON(KEYS.MANUAL, null);
-  if (savedManual) renderManual();
-  renderCarriers();
-  renderLoose();
+  if (savedCSV) renderCSV(savedCSV);
 
-  const now = isoToUTCDisplay(new Date().toISOString());
-  if (updatedSmall) updatedSmall.textContent = `Last updated (UTC): ${now}`;
+  const savedManual = loadJSON(KEYS.MANUAL, null);
+  if (savedManual) {
+    // restore inputs
+    const i = savedManual.inputs;
+    if (i) {
+      setN("m_good_racks", i.goodRacks);
+      setN("m_core_racks", i.coreRacks);
+      setN("m_good_eracks", i.goodERacks);
+      setN("m_core_eracks", i.coreERacks);
+      setN("m_good_axles", i.goodAxles);
+      setN("m_used_axles", i.usedAxles);
+      setN("m_good_ds", i.goodDS);
+      setN("m_used_ds", i.usedDS);
+      setN("m_good_gb", i.goodGB);
+      setN("m_used_gb", i.usedGB);
+    }
+    manualRender(savedManual);
+  }
+
+  carriersRender();
+  looseRender();
+
+  const now = new Date().toISOString();
+  if (updatedSmall) updatedSmall.textContent = `Last updated: ${isoDisplay(now)}`;
 }
 
 document.addEventListener("DOMContentLoaded", init);
