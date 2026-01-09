@@ -10,6 +10,9 @@
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <!-- SheetJS (XLSX export with multiple tabs) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 
 <body>
@@ -23,7 +26,7 @@
     </div>
 
     <div class="app-actions">
-      <button id="export_all_btn" class="btn primary">Export All (CSV)</button>
+      <button id="export_all_btn" class="btn primary">Export All (XLSX)</button>
     </div>
   </header>
 
@@ -43,14 +46,14 @@
         <article class="panel">
           <h2>CSV Import</h2>
           <p class="panel-sub">
-            Upload WH Returns CSV. Applies multipliers only when they look like real multipliers:
+            Upload WH Returns CSV. Multiplier-safe:
             <span class="mono">600153760440x2</span> or <span class="mono">2x600153760440</span>.
-            It will NOT treat part numbers like <span class="mono">x2020</span> as a multiplier.
+            It will NOT treat <span class="mono">x2020</span> as 2020 parts.
           </p>
 
           <div class="form-row">
             <input id="csv_file" type="file" accept=".csv" />
-            <button id="csv_export_btn" class="btn small">Export CSV Summary</button>
+            <button id="csv_export_btn" class="btn small">Export CSV Summary (CSV)</button>
             <button id="csv_clear_btn" class="btn small danger">Clear</button>
           </div>
 
@@ -69,9 +72,7 @@
 
         <article class="panel">
           <h2>Validation / Skips</h2>
-          <p class="panel-sub">
-            Audit-friendly proof of what was skipped and why.
-          </p>
+          <p class="panel-sub">Audit-friendly proof of what was skipped and why.</p>
           <div class="table-scroll">
             <table id="table_validation" class="data-table">
               <thead><tr><th>Reason</th><th>Count</th></tr></thead>
@@ -79,6 +80,40 @@
             </table>
           </div>
           <p class="panel-sub note" id="csv_run_note"></p>
+        </article>
+      </div>
+
+      <!-- ===== FedEx tracking list check (NEW) ===== -->
+      <div class="grid two">
+        <article class="panel">
+          <h2>FedEx Tracking List Check</h2>
+          <p class="panel-sub">
+            Upload the FedEx downloadable list (CSV or TXT). This checks whether every FedEx tracking number exists
+            in the WH CSV tracking list (and shows anything missing/extra).
+          </p>
+
+          <div class="form-row">
+            <input id="fedex_file" type="file" accept=".csv,.txt" />
+            <button id="fedex_clear_btn" class="btn small danger">Clear FedEx Check</button>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi"><span class="kpi-label">FedEx found</span><span id="kpi_fedex_total" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Matched</span><span id="kpi_fedex_matched" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Missing in WH</span><span id="kpi_fedex_missing_in_wh" class="kpi-val">0</span></div>
+            <div class="kpi"><span class="kpi-label">Missing in FedEx</span><span id="kpi_wh_missing_in_fedex" class="kpi-val">0</span></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>FedEx Differences</h2>
+          <p class="panel-sub">Shows the numbers so you can copy/paste and verify.</p>
+          <div class="table-scroll tall">
+            <table id="table_fedex_diff" class="data-table">
+              <thead><tr><th>Type</th><th>Tracking Number</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </article>
       </div>
 
@@ -110,9 +145,7 @@
 
         <article class="panel">
           <h2>Notes</h2>
-          <p class="panel-sub">
-            Tracking totals are separated below. The tracking list is sorted by <b>most parts first</b>.
-          </p>
+          <p class="panel-sub">Tracking totals are separated below.</p>
           <p class="panel-sub note" id="csv_hint"></p>
         </article>
       </div>
@@ -121,7 +154,7 @@
       <div class="grid two">
         <article class="panel">
           <h2>Tracking Numbers + Total Parts</h2>
-          <p class="panel-sub">Main receiving view (multiplier-aware)</p>
+          <p class="panel-sub">Sorted by most parts first (multiplier-aware)</p>
           <div class="table-scroll tall">
             <table id="table_tracking" class="data-table">
               <thead><tr><th>Track Number</th><th>Total Parts</th></tr></thead>
@@ -151,9 +184,7 @@
       <div class="grid two">
         <article class="panel">
           <h2>Manual Entry</h2>
-          <p class="panel-sub">
-            Enter counts for racks/axles/drive shafts/gear boxes. Saves locally.
-          </p>
+          <p class="panel-sub">Enter counts for racks/axles/drive shafts/gear boxes. Saves locally.</p>
 
           <div class="form-row">
             <input id="manual_dt" type="datetime-local" />
@@ -224,7 +255,7 @@
       <div class="grid two">
         <article class="panel">
           <h2>Carrier Log</h2>
-          <p class="panel-sub">Log received qty, received time, completed time.</p>
+          <p class="panel-sub">Log received qty, received time, completed time. Mark complete with checkbox or button.</p>
 
           <div class="form-row">
             <input id="carrier_name" type="text" placeholder="Carrier (UPS, FedEx, etc.)" />
@@ -237,13 +268,23 @@
           </div>
 
           <div class="form-row">
-            <button id="carrier_export" class="btn small">Export CSV</button>
+            <button id="carrier_export" class="btn small">Export (XLSX)</button>
             <button id="carrier_clear" class="btn small danger">Clear</button>
           </div>
 
           <div class="table-scroll tall">
             <table id="table_carriers" class="data-table">
-              <thead><tr><th>Carrier</th><th>Qty</th><th>Received</th><th>Completed</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Done</th>
+                  <th>Carrier</th>
+                  <th>Qty</th>
+                  <th>Received</th>
+                  <th>Completed</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
               <tbody></tbody>
             </table>
           </div>
@@ -283,7 +324,7 @@
           </div>
 
           <div class="form-row">
-            <button id="loose_export" class="btn small">Export CSV</button>
+            <button id="loose_export" class="btn small">Export (XLSX)</button>
             <button id="loose_clear" class="btn small danger">Clear</button>
           </div>
 
