@@ -10,8 +10,11 @@
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
-  <!-- Excel export with styling -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+  <!-- CSV parser -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Excel export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <!-- PDF export -->
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -21,20 +24,17 @@
 <body>
   <header class="app-bar">
     <div class="app-left">
-      <img src="detroit-axle-logo.png" alt="DA Logo" class="logo" />
+      <img src="detroit-axle-logo.png" alt="DA Logo" class="logo" id="da_logo" />
       <div class="app-titles">
         <h1>RRPD Receiving Dashboard</h1>
-        <span id="status_text" class="status">Ready</span>
+        <span id="status_text" class="status">Upload WH CSV to begin.</span>
       </div>
     </div>
 
     <div class="app-actions">
-      <label class="file-btn">
-        Upload WH CSV
-        <input id="wh_csv" type="file" accept=".csv,.txt" />
-      </label>
-
-      <button id="btn_export_snapshot" class="btn primary">Export RRPD Summary</button>
+      <input id="csv_input" type="file" accept=".csv" hidden />
+      <button id="upload_btn" class="btn">Upload WH CSV</button>
+      <button id="export_btn" class="btn primary" disabled>Export RRPD Summary</button>
     </div>
   </header>
 
@@ -49,56 +49,69 @@
   <main class="page">
     <!-- DASHBOARD -->
     <section id="tab-dashboard" class="tab active">
-      <article class="panel">
-        <h2>Tracking Counters (Total Scans)</h2>
-        <p class="panel-sub">Counts are total scan rows. Repeated Tracking Numbers counts how many tracking IDs appear more than once.</p>
+      <div class="grid two">
+        <article class="panel">
+          <h2>Tracking Counters (Total Scans)</h2>
+          <p class="panel-sub">
+            Counts are total scan rows. Repeated Tracking Numbers counts how many tracking IDs appear more than once.
+          </p>
 
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">FedEx</div>
-            <div id="count_fedex" class="stat-value">0</div>
+          <div class="kpi-grid">
+            <div class="kpi">
+              <div class="kpi-title">FedEx</div>
+              <div class="kpi-value" id="kpi_fedex">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-title">UPS</div>
+              <div class="kpi-value" id="kpi_ups">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-title">USPS</div>
+              <div class="kpi-value" id="kpi_usps">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-title">Other</div>
+              <div class="kpi-value" id="kpi_other">0</div>
+            </div>
           </div>
 
-          <div class="stat-card">
-            <div class="stat-label">UPS</div>
-            <div id="count_ups" class="stat-value">0</div>
+          <div class="kpi-grid two-wide">
+            <div class="kpi wide">
+              <div class="kpi-title">Total Scans</div>
+              <div class="kpi-value" id="kpi_total">0</div>
+            </div>
+            <div class="kpi wide">
+              <div class="kpi-title">Repeated Tracking Numbers</div>
+              <div class="kpi-value" id="kpi_dupes">0</div>
+            </div>
           </div>
+        </article>
 
-          <div class="stat-card">
-            <div class="stat-label">USPS</div>
-            <div id="count_usps" class="stat-value">0</div>
-          </div>
+        <article class="panel">
+          <h2>Tracking Samples (Latest 25)</h2>
+          <p class="panel-sub">This is only for on-screen verification. Exports are counts-only.</p>
+          <div class="scroll-box" id="tracking_samples"></div>
+        </article>
+      </div>
 
-          <div class="stat-card">
-            <div class="stat-label">Other</div>
-            <div id="count_other" class="stat-value">0</div>
-          </div>
-        </div>
+      <div class="grid two" style="margin-top:16px;">
+        <article class="panel">
+          <h2>Carrier Scans (Bar)</h2>
+          <p class="panel-sub">Total scans per carrier (rows).</p>
+          <canvas id="chart_carriers"></canvas>
+        </article>
 
-        <div class="mini-grid">
-          <div class="mini-stat">
-            <div class="mini-label">Total Scans</div>
-            <div id="count_total_scans" class="mini-value">0</div>
-          </div>
-          <div class="mini-stat">
-            <div class="mini-label">Repeated Tracking Numbers</div>
-            <div id="count_repeated" class="mini-value">0</div>
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top:14px;">
-          <article class="panel tight">
-            <h3>Carrier Scans (Bar)</h3>
-            <canvas id="chart_carriers"></canvas>
-          </article>
-
-          <article class="panel tight">
-            <h3>Tracking Samples (Latest 25)</h3>
-            <div id="tracking_sample" class="mono-list"></div>
-            <p class="panel-sub note">This is only for on-screen verification. Exports are counts-only.</p>
-          </article>
-        </div>
-      </article>
+        <article class="panel">
+          <h2>Repeated Tracking Numbers (Top)</h2>
+          <p class="panel-sub">Most repeated tracking IDs (counted by scan rows).</p>
+          <table class="data-table" id="table_dupes">
+            <thead>
+              <tr><th>Tracking</th><th>Scans</th><th>Carrier</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
     </section>
 
     <!-- RETURN CONDITIONS -->
@@ -106,14 +119,16 @@
       <div class="grid two">
         <article class="panel">
           <h2>Return Conditions (Multiplier-aware)</h2>
-          <p class="panel-sub">Parts count uses x2/2x/x3… when present in the description.</p>
+          <p class="panel-sub">Parts count uses x2/2x/x3… when present in the Part Number.</p>
           <canvas id="chart_conditions"></canvas>
         </article>
 
         <article class="panel">
           <h2>Condition Totals</h2>
-          <table id="table_conditions" class="data-table">
-            <thead><tr><th>Condition</th><th>Parts</th></tr></thead>
+          <table class="data-table" id="table_conditions">
+            <thead>
+              <tr><th>Condition</th><th>Parts</th></tr>
+            </thead>
             <tbody></tbody>
           </table>
         </article>
@@ -122,118 +137,117 @@
 
     <!-- MANUAL COUNTS -->
     <section id="tab-manual" class="tab">
-      <article class="panel">
-        <h2>Manual Counts</h2>
-        <p class="panel-sub">Saved on this computer (localStorage).</p>
+      <div class="grid two">
+        <article class="panel">
+          <h2>Manual Counts</h2>
+          <p class="panel-sub">Saved locally (per computer). Used for totals + ratios.</p>
 
-        <div class="grid two">
-          <article class="panel tight">
-            <h3>Enter / Update</h3>
-            <div class="form-row">
-              <select id="manual_category">
-                <option>Good Racks</option>
-                <option>Core Racks</option>
-                <option>Good Electric Racks</option>
-                <option>Core Electric Racks</option>
-                <option>Good Axles</option>
-                <option>Used Axles</option>
-                <option>Good Drive Shafts</option>
-                <option>Used Drive Shafts</option>
-                <option>Good Gear boxes</option>
-                <option>Used Gear boxes</option>
-              </select>
-              <input id="manual_count" type="number" min="0" placeholder="Count" />
-              <button id="manual_save" class="btn small primary">Save</button>
-              <button id="manual_clear" class="btn small danger">Clear All</button>
-            </div>
+          <div class="manual-grid" id="manual_grid"></div>
 
-            <p class="panel-sub note">Save overwrites the selected category value.</p>
-          </article>
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn small" id="manual_save">Save Manual Counts</button>
+            <button class="btn small danger" id="manual_clear">Clear Manual Counts</button>
+          </div>
 
-          <article class="panel tight">
-            <h3>Current Values</h3>
-            <table id="table_manual" class="data-table">
-              <thead><tr><th>Category</th><th>Count</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </article>
-        </div>
+          <p class="panel-sub note" id="manual_saved_note"></p>
+        </article>
 
-        <div class="grid two" style="margin-top:14px;">
-          <article class="panel tight">
-            <h3>Totals</h3>
-            <table id="table_manual_totals" class="data-table">
-              <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </article>
-
-          <article class="panel tight">
-            <h3>Ratios</h3>
-            <table id="table_manual_ratios" class="data-table">
-              <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </article>
-        </div>
-      </article>
+        <article class="panel">
+          <h2>Ratios</h2>
+          <p class="panel-sub">Good : counterpart (Core/Used). Shows 0 if counterpart is 0.</p>
+          <table class="data-table" id="table_ratios">
+            <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
     </section>
 
-    <!-- CARRIERS -->
+    <!-- CARRIERS (MANUAL LOG) -->
     <section id="tab-carriers" class="tab">
-      <article class="panel">
-        <h2>Carriers</h2>
-        <p class="panel-sub">Manual log with completion timestamp. Saved on this computer (localStorage).</p>
+      <div class="grid two">
+        <article class="panel">
+          <h2>Carrier Log</h2>
+          <p class="panel-sub">Log received qty by carrier + received date + completed date.</p>
 
-        <div class="form-row">
-          <input id="carriers_name" type="text" placeholder="Carrier (FedEx/UPS/USPS/etc)" />
-          <input id="carriers_qty" type="number" min="0" placeholder="Received Qty" />
-          <input id="carriers_received_at" type="datetime-local" />
-          <button id="carriers_add" class="btn small primary">Add</button>
-          <button id="carriers_clear" class="btn small danger">Clear All</button>
-        </div>
+          <div class="form-row">
+            <select id="carrier_name">
+              <option value="">Carrier…</option>
+              <option>FedEx</option>
+              <option>UPS</option>
+              <option>USPS</option>
+              <option>Other</option>
+            </select>
 
-        <table id="table_carriers" class="data-table">
-          <thead>
-            <tr>
-              <th>Carrier</th>
-              <th>Received Qty</th>
-              <th>Received At</th>
-              <th>Completed At</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </article>
+            <input id="carrier_qty" type="number" min="0" placeholder="Received qty" />
+            <input id="carrier_received" type="date" />
+            <button id="carrier_add" class="btn small">Add</button>
+            <button id="carrier_clear" class="btn small danger">Clear</button>
+          </div>
+
+          <table class="data-table" id="table_carriers">
+            <thead>
+              <tr>
+                <th>Carrier</th>
+                <th>Qty</th>
+                <th>Received</th>
+                <th>Status</th>
+                <th>Completed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+
+          <p class="panel-sub note">This is local per computer unless we add a shared backend.</p>
+        </article>
+
+        <article class="panel">
+          <h2>Carrier Volume</h2>
+          <p class="panel-sub">Bar: total received qty per carrier (manual log).</p>
+          <canvas id="chart_carrier_log"></canvas>
+        </article>
+      </div>
     </section>
 
     <!-- LOOSE PARTS -->
     <section id="tab-loose" class="tab">
-      <article class="panel">
-        <h2>Loose Parts</h2>
-        <p class="panel-sub">Manual entry. Saved on this computer (localStorage).</p>
+      <div class="grid two">
+        <article class="panel">
+          <h2>Loose Parts</h2>
+          <p class="panel-sub">Enter part number + condition + date.</p>
 
-        <div class="form-row">
-          <input id="loose_date" type="date" />
-          <input id="loose_part" type="text" placeholder="Part Number (typed if label damaged)" />
-          <select id="loose_condition">
-            <option>Good</option>
-            <option>Used</option>
-            <option>Core</option>
-            <option>Missing</option>
-            <option>Not our part</option>
-          </select>
-          <button id="loose_add" class="btn small primary">Add</button>
-          <button id="loose_clear" class="btn small danger">Clear All</button>
-        </div>
+          <div class="form-row">
+            <input id="loose_part" type="text" placeholder="Part number (typed/manual ok)" />
+            <select id="loose_condition">
+              <option value="">Condition…</option>
+              <option>Good</option>
+              <option>Used</option>
+              <option>Core</option>
+              <option>Missing</option>
+              <option>Not our part</option>
+            </select>
+            <input id="loose_date" type="date" />
+            <button id="loose_add" class="btn small">Add</button>
+            <button id="loose_clear" class="btn small danger">Clear</button>
+          </div>
 
-        <table id="table_loose" class="data-table">
-          <thead><tr><th>Date</th><th>Part Number</th><th>Condition</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </article>
+          <table class="data-table" id="table_loose">
+            <thead>
+              <tr><th>Date</th><th>Part</th><th>Condition</th><th>Actions</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+
+          <p class="panel-sub note">No graph needed (per your request).</p>
+        </article>
+
+        <article class="panel">
+          <h2>Saved Snapshots (This Computer)</h2>
+          <p class="panel-sub">Each export saves a dated snapshot so info does not disappear.</p>
+          <div class="scroll-box" id="snapshot_list"></div>
+        </article>
+      </div>
     </section>
   </main>
 
@@ -242,27 +256,26 @@
     <span id="updated_small"></span>
   </footer>
 
-  <!-- EXPORT MODAL -->
-  <div id="export_modal" class="modal-backdrop" style="display:none;">
-    <div class="modal">
-      <h2 id="export_title">RRPD Summary</h2>
-      <p class="panel-sub">Review everything before export. Exports are counts-only (no raw tracking list).</p>
-
-      <div class="form-row">
-        <input id="export_date" type="date" />
+  <!-- Export Preview Modal -->
+  <div class="modal" id="export_modal" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>RRPD Summary</h3>
+        <button class="btn small danger" id="export_close">Cancel</button>
       </div>
 
-      <div id="export_preview" class="preview-box"></div>
+      <div class="modal-body">
+        <pre id="export_preview" class="preview-box"></pre>
 
-      <label class="confirm-row">
-        <input id="export_confirm" type="checkbox" />
-        <span>I confirm this snapshot is correct.</span>
-      </label>
+        <label class="confirm-row">
+          <input type="checkbox" id="export_confirm" />
+          <span>I confirm this snapshot is correct.</span>
+        </label>
+      </div>
 
       <div class="modal-actions">
-        <button id="export_cancel" class="btn">Cancel</button>
-        <button id="export_pdf" class="btn primary">Export PDF</button>
-        <button id="export_excel" class="btn primary">Export Excel</button>
+        <button class="btn" id="export_pdf" disabled>Export PDF</button>
+        <button class="btn primary" id="export_excel" disabled>Export Excel</button>
       </div>
     </div>
   </div>
