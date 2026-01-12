@@ -32,18 +32,22 @@
     </div>
 
     <div class="app-actions">
-      <input id="csv_input" type="file" accept=".csv" hidden />
-      <button id="upload_btn" class="btn">Upload WH CSV</button>
+      <input id="wh_csv_input" type="file" accept=".csv" hidden />
+      <button id="wh_upload_btn" class="btn">Upload WH CSV</button>
+
+      <button id="save_log_btn" class="btn" disabled>Save to Logs</button>
       <button id="export_btn" class="btn primary" disabled>Export RRPD Summary</button>
     </div>
   </header>
 
   <nav class="tabs">
     <button class="tab-btn active" data-target="tab-dashboard">Dashboard</button>
-    <button class="tab-btn" data-target="tab-conditions">Return Conditions</button>
-    <button class="tab-btn" data-target="tab-manual">Manual Counts</button>
     <button class="tab-btn" data-target="tab-carriers">Carriers</button>
+    <button class="tab-btn" data-target="tab-conditions">Returns Condition</button>
+    <button class="tab-btn" data-target="tab-manual">Manual Counts</button>
+    <button class="tab-btn" data-target="tab-manifest">Manifest</button>
     <button class="tab-btn" data-target="tab-loose">Loose Parts</button>
+    <button class="tab-btn" data-target="tab-logs">Logs</button>
   </nav>
 
   <main class="page">
@@ -53,7 +57,8 @@
         <article class="panel">
           <h2>Tracking Counters (Total Scans)</h2>
           <p class="panel-sub">
-            Counts are total scan rows. Repeated Tracking Numbers counts how many tracking IDs appear more than once.
+            Tracking scans include ALL scan rows, including Return Label / Packing Slip.
+            Parts count EXCLUDES Return Label / Packing Slip.
           </p>
 
           <div class="kpi-grid">
@@ -78,7 +83,18 @@
           <div class="kpi-grid two-wide">
             <div class="kpi wide">
               <div class="kpi-title">Total Scans</div>
-              <div class="kpi-value" id="kpi_total">0</div>
+              <div class="kpi-value" id="kpi_total_scans">0</div>
+            </div>
+            <div class="kpi wide">
+              <div class="kpi-title">Total Parts</div>
+              <div class="kpi-value" id="kpi_total_parts">0</div>
+            </div>
+          </div>
+
+          <div class="kpi-grid two-wide" style="margin-top:10px;">
+            <div class="kpi wide">
+              <div class="kpi-title">Unique Tracking Numbers</div>
+              <div class="kpi-value" id="kpi_unique_tracking">0</div>
             </div>
             <div class="kpi wide">
               <div class="kpi-title">Repeated Tracking Numbers</div>
@@ -89,7 +105,7 @@
 
         <article class="panel">
           <h2>Tracking Samples (Latest 25)</h2>
-          <p class="panel-sub">This is only for on-screen verification. Exports are counts-only.</p>
+          <p class="panel-sub">On-screen verification only.</p>
           <div class="scroll-box" id="tracking_samples"></div>
         </article>
       </div>
@@ -97,13 +113,13 @@
       <div class="grid two" style="margin-top:16px;">
         <article class="panel">
           <h2>Carrier Scans (Bar)</h2>
-          <p class="panel-sub">Total scans per carrier (rows).</p>
+          <p class="panel-sub">Total scan rows per carrier.</p>
           <canvas id="chart_carriers"></canvas>
         </article>
 
         <article class="panel">
           <h2>Repeated Tracking Numbers (Top)</h2>
-          <p class="panel-sub">Most repeated tracking IDs (counted by scan rows).</p>
+          <p class="panel-sub">Tracking IDs that appear more than once (scan rows).</p>
           <table class="data-table" id="table_dupes">
             <thead>
               <tr><th>Tracking</th><th>Scans</th><th>Carrier</th></tr>
@@ -114,61 +130,12 @@
       </div>
     </section>
 
-    <!-- RETURN CONDITIONS -->
-    <section id="tab-conditions" class="tab">
-      <div class="grid two">
-        <article class="panel">
-          <h2>Return Conditions (Multiplier-aware)</h2>
-          <p class="panel-sub">Parts count uses x2/2x/x3… when present in the Part Number.</p>
-          <canvas id="chart_conditions"></canvas>
-        </article>
-
-        <article class="panel">
-          <h2>Condition Totals</h2>
-          <table class="data-table" id="table_conditions">
-            <thead>
-              <tr><th>Condition</th><th>Parts</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </article>
-      </div>
-    </section>
-
-    <!-- MANUAL COUNTS -->
-    <section id="tab-manual" class="tab">
-      <div class="grid two">
-        <article class="panel">
-          <h2>Manual Counts</h2>
-          <p class="panel-sub">Saved locally (per computer). Used for totals + ratios.</p>
-
-          <div class="manual-grid" id="manual_grid"></div>
-
-          <div style="margin-top:10px; display:flex; gap:8px;">
-            <button class="btn small" id="manual_save">Save Manual Counts</button>
-            <button class="btn small danger" id="manual_clear">Clear Manual Counts</button>
-          </div>
-
-          <p class="panel-sub note" id="manual_saved_note"></p>
-        </article>
-
-        <article class="panel">
-          <h2>Ratios</h2>
-          <p class="panel-sub">Good : counterpart (Core/Used). Shows 0 if counterpart is 0.</p>
-          <table class="data-table" id="table_ratios">
-            <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </article>
-      </div>
-    </section>
-
-    <!-- CARRIERS (MANUAL LOG) -->
+    <!-- CARRIERS -->
     <section id="tab-carriers" class="tab">
       <div class="grid two">
         <article class="panel">
           <h2>Carrier Log</h2>
-          <p class="panel-sub">Log received qty by carrier + received date + completed date.</p>
+          <p class="panel-sub">Manual log: received qty, received date, complete toggle adds completed date/time.</p>
 
           <div class="form-row">
             <select id="carrier_name">
@@ -199,7 +166,7 @@
             <tbody></tbody>
           </table>
 
-          <p class="panel-sub note">This is local per computer unless we add a shared backend.</p>
+          <p class="panel-sub note">Local per browser unless we add a shared backend.</p>
         </article>
 
         <article class="panel">
@@ -210,12 +177,123 @@
       </div>
     </section>
 
+    <!-- RETURNS CONDITION -->
+    <section id="tab-conditions" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Return Conditions (Parts)</h2>
+          <p class="panel-sub">
+            Parts only (excludes Return Label + Packing Slip). Multiplier-aware (x2/2x/x3...).
+          </p>
+          <canvas id="chart_conditions"></canvas>
+        </article>
+
+        <article class="panel">
+          <h2>Condition Totals</h2>
+          <table class="data-table" id="table_conditions">
+            <thead>
+              <tr><th>Condition</th><th>Parts</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <!-- MANUAL COUNTS -->
+    <section id="tab-manual" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Manual Counts</h2>
+          <p class="panel-sub">Saved locally (per browser). Used for totals + ratios.</p>
+
+          <div class="manual-grid" id="manual_grid"></div>
+
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn small" id="manual_save">Save Manual Counts</button>
+            <button class="btn small danger" id="manual_clear">Clear Manual Counts</button>
+          </div>
+
+          <p class="panel-sub note" id="manual_saved_note"></p>
+        </article>
+
+        <article class="panel">
+          <h2>Ratios</h2>
+          <p class="panel-sub">Good : counterpart (Core/Used). 0 if counterpart is 0.</p>
+          <table class="data-table" id="table_ratios">
+            <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <!-- MANIFEST -->
+    <section id="tab-manifest" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>FedEx Manifest Check (CSV)</h2>
+          <p class="panel-sub">
+            Upload FedEx Manifest CSV. We compare FedEx tracking numbers ONLY against WH CSV FedEx trackings.
+          </p>
+
+          <div class="form-row">
+            <input id="manifest_csv_input" type="file" accept=".csv" />
+            <button id="manifest_run" class="btn small">Run Compare</button>
+            <button id="manifest_clear" class="btn small danger">Clear</button>
+          </div>
+
+          <div class="kpi-grid two-wide">
+            <div class="kpi wide">
+              <div class="kpi-title">Manifest FedEx Trackings</div>
+              <div class="kpi-value" id="kpi_manifest_total">0</div>
+            </div>
+            <div class="kpi wide">
+              <div class="kpi-title">WH FedEx Trackings</div>
+              <div class="kpi-value" id="kpi_wh_fedex_unique">0</div>
+            </div>
+          </div>
+
+          <div class="kpi-grid two-wide" style="margin-top:10px;">
+            <div class="kpi wide">
+              <div class="kpi-title">Missing in WH</div>
+              <div class="kpi-value" id="kpi_missing_in_wh">0</div>
+            </div>
+            <div class="kpi wide">
+              <div class="kpi-title">Extra in WH</div>
+              <div class="kpi-value" id="kpi_extra_in_wh">0</div>
+            </div>
+          </div>
+
+          <p class="panel-sub note">
+            Tip: Manifest CSV needs at least one column containing tracking numbers.
+          </p>
+        </article>
+
+        <article class="panel">
+          <h2>Manifest Differences</h2>
+          <p class="panel-sub">Lists show FedEx tracking IDs only.</p>
+
+          <div class="manifest-split">
+            <div>
+              <h3 class="mini-title">Missing in WH</h3>
+              <div class="scroll-box" id="manifest_missing_list"></div>
+            </div>
+            <div>
+              <h3 class="mini-title">Extra in WH</h3>
+              <div class="scroll-box" id="manifest_extra_list"></div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <!-- LOOSE PARTS -->
     <section id="tab-loose" class="tab">
       <div class="grid two">
         <article class="panel">
           <h2>Loose Parts</h2>
-          <p class="panel-sub">Enter part number + condition + date.</p>
+          <p class="panel-sub">Enter part number + condition + date (required).</p>
 
           <div class="form-row">
             <input id="loose_part" type="text" placeholder="Part number (typed/manual ok)" />
@@ -238,14 +316,42 @@
             </thead>
             <tbody></tbody>
           </table>
-
-          <p class="panel-sub note">No graph needed (per your request).</p>
         </article>
 
         <article class="panel">
-          <h2>Saved Snapshots (This Computer)</h2>
-          <p class="panel-sub">Each export saves a dated snapshot so info does not disappear.</p>
-          <div class="scroll-box" id="snapshot_list"></div>
+          <h2>Loose Parts Totals</h2>
+          <p class="panel-sub">Counts by condition (no graph).</p>
+          <table class="data-table" id="table_loose_totals">
+            <thead><tr><th>Condition</th><th>Count</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section id="tab-logs" class="tab">
+      <div class="grid two">
+        <article class="panel">
+          <h2>Saved Logs (Snapshots)</h2>
+          <p class="panel-sub">
+            Logs are saved on the site for the owner to review. Logs do NOT appear in PDF/Excel exports.
+          </p>
+          <div class="scroll-box" id="logs_list"></div>
+
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn small danger" id="logs_clear">Clear Logs (This Browser)</button>
+          </div>
+
+          <p class="panel-sub note">
+            If you need global/shared logs across countries, we’ll add a backend.
+          </p>
+        </article>
+
+        <article class="panel">
+          <h2>Log Details</h2>
+          <p class="panel-sub">Click a snapshot on the left to view details.</p>
+          <pre class="preview-box" id="log_details"></pre>
         </article>
       </div>
     </section>
