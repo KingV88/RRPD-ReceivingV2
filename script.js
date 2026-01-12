@@ -1,12 +1,46 @@
-console.log("RRPD v2 script loaded");
+console.log("RRPD v3 script loaded");
 
+/* ---------- DOM ---------- */
 const statusEl = document.getElementById("status_text");
 const updatedSmall = document.getElementById("updated_small");
 
-const csvInput = document.getElementById("csv_input");
-const uploadBtn = document.getElementById("upload_btn");
+const whCsvInput = document.getElementById("wh_csv_input");
+const whUploadBtn = document.getElementById("wh_upload_btn");
+
+const saveLogBtn = document.getElementById("save_log_btn");
 const exportBtn = document.getElementById("export_btn");
 
+/* Dashboard KPI */
+const kpiFedEx = document.getElementById("kpi_fedex");
+const kpiUPS = document.getElementById("kpi_ups");
+const kpiUSPS = document.getElementById("kpi_usps");
+const kpiOther = document.getElementById("kpi_other");
+const kpiTotalScans = document.getElementById("kpi_total_scans");
+const kpiTotalParts = document.getElementById("kpi_total_parts");
+const kpiUniqueTracking = document.getElementById("kpi_unique_tracking");
+const kpiDupes = document.getElementById("kpi_dupes");
+
+const trackingSamplesEl = document.getElementById("tracking_samples");
+
+/* Manifest */
+const manifestCsvInput = document.getElementById("manifest_csv_input");
+const manifestRunBtn = document.getElementById("manifest_run");
+const manifestClearBtn = document.getElementById("manifest_clear");
+
+const kpiManifestTotal = document.getElementById("kpi_manifest_total");
+const kpiWhFedexUnique = document.getElementById("kpi_wh_fedex_unique");
+const kpiMissingInWh = document.getElementById("kpi_missing_in_wh");
+const kpiExtraInWh = document.getElementById("kpi_extra_in_wh");
+
+const manifestMissingList = document.getElementById("manifest_missing_list");
+const manifestExtraList = document.getElementById("manifest_extra_list");
+
+/* Logs */
+const logsListEl = document.getElementById("logs_list");
+const logDetailsEl = document.getElementById("log_details");
+const logsClearBtn = document.getElementById("logs_clear");
+
+/* Export modal */
 const exportModal = document.getElementById("export_modal");
 const exportClose = document.getElementById("export_close");
 const exportPreview = document.getElementById("export_preview");
@@ -14,27 +48,35 @@ const exportConfirm = document.getElementById("export_confirm");
 const exportPDFBtn = document.getElementById("export_pdf");
 const exportExcelBtn = document.getElementById("export_excel");
 
-const kpiFedEx = document.getElementById("kpi_fedex");
-const kpiUPS = document.getElementById("kpi_ups");
-const kpiUSPS = document.getElementById("kpi_usps");
-const kpiOther = document.getElementById("kpi_other");
-const kpiTotal = document.getElementById("kpi_total");
-const kpiDupes = document.getElementById("kpi_dupes");
-
-const trackingSamplesEl = document.getElementById("tracking_samples");
-
+/* ---------- State ---------- */
 let charts = {};
+const LS_KEYS = {
+  manual: "rrpd_manual_counts_v3",
+  carriers: "rrpd_carrier_log_v3",
+  loose: "rrpd_loose_parts_v3",
+  logs: "rrpd_logs_v3"
+};
+
 let state = {
-  loadedAt: null,
-  rows: [],
+  whRows: [],
   computed: null,
+  loadedAt: null,
+
   manual: {},
   carrierLog: [],
   looseParts: [],
-  snapshots: []
+
+  logs: [],
+
+  manifest: {
+    loaded: false,
+    fedexManifestSet: new Set(),
+    missingInWh: [],
+    extraInWh: []
+  }
 };
 
-/* ---------------- Tabs ---------------- */
+/* ---------- Tabs ---------- */
 function wireTabs() {
   const tabButtons = document.querySelectorAll(".tab-btn");
   const tabs = document.querySelectorAll(".tab");
@@ -50,104 +92,95 @@ function wireTabs() {
   });
 }
 
-/* ---------------- Local Storage ---------------- */
-const LS_KEYS = {
-  manual: "rrpd_manual_counts_v2",
-  carriers: "rrpd_carrier_log_v2",
-  loose: "rrpd_loose_parts_v2",
-  snapshots: "rrpd_snapshots_v2"
-};
-
+/* ---------- Local Storage ---------- */
 function loadLocal() {
   try {
     state.manual = JSON.parse(localStorage.getItem(LS_KEYS.manual) || "{}");
     state.carrierLog = JSON.parse(localStorage.getItem(LS_KEYS.carriers) || "[]");
     state.looseParts = JSON.parse(localStorage.getItem(LS_KEYS.loose) || "[]");
-    state.snapshots = JSON.parse(localStorage.getItem(LS_KEYS.snapshots) || "[]");
+    state.logs = JSON.parse(localStorage.getItem(LS_KEYS.logs) || "[]");
   } catch {
     state.manual = {};
     state.carrierLog = [];
     state.looseParts = [];
-    state.snapshots = [];
+    state.logs = [];
   }
 }
-
 function saveLocal() {
   localStorage.setItem(LS_KEYS.manual, JSON.stringify(state.manual));
   localStorage.setItem(LS_KEYS.carriers, JSON.stringify(state.carrierLog));
   localStorage.setItem(LS_KEYS.loose, JSON.stringify(state.looseParts));
-  localStorage.setItem(LS_KEYS.snapshots, JSON.stringify(state.snapshots));
+  localStorage.setItem(LS_KEYS.logs, JSON.stringify(state.logs));
 }
 
-/* ---------------- Helpers ---------------- */
+/* ---------- Helpers ---------- */
 function fmtInt(n) {
   return (Number(n) || 0).toLocaleString();
 }
-
 function nowISO() {
   return new Date().toISOString();
 }
-
 function dateStampLocal() {
-  // YYYY-MM-DD in local time
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-
-function classifyCarrier(trackingRaw) {
-  const t = String(trackingRaw || "").trim().toUpperCase();
-
-  // UPS: 1Z...
-  if (t.startsWith("1Z")) return "UPS";
-
-  // USPS (common in your screenshots): starts 420...
-  if (t.startsWith("420")) return "USPS";
-
-  // FedEx (your rule): starts 96... OR short 797...
-  if (t.startsWith("96") || t.startsWith("797")) return "FedEx";
-
-  return "Other";
-}
-
-function extractMultiplier(text) {
-  // supports: x2, X2, 2x, 3x, x10, etc
-  const s = String(text || "");
-  const m1 = s.match(/(?:^|[^0-9])x\s*(\d{1,2})(?!\d)/i);
-  if (m1) return Math.max(1, parseInt(m1[1], 10));
-
-  const m2 = s.match(/(\d{1,2})\s*x(?!\d)/i);
-  if (m2) return Math.max(1, parseInt(m2[1], 10));
-
-  return 1;
-}
-
-function stripMultiplier(text) {
-  // remove trailing or embedded xN / Nx for cleaner grouping if needed
-  return String(text || "")
-    .replace(/x\s*\d{1,2}/ig, "")
-    .replace(/\d{1,2}\s*x/ig, "")
-    .trim();
-}
-
 function safeStr(v) {
   const s = String(v ?? "").trim();
   return s.length ? s : "";
 }
+function normalizeTracking(v) {
+  // keep as text, strip spaces and trailing .0, fix scientific-looking strings by leaving as-is
+  let t = safeStr(v);
+  t = t.replace(/\s+/g, "");
+  t = t.replace(/\.0$/, "");
+  return t;
+}
 
-/* ---------------- Chart ---------------- */
+/* Carrier rules (yours) */
+function classifyCarrier(trackingRaw) {
+  const t = normalizeTracking(trackingRaw).toUpperCase();
+  if (!t) return "Other";
+  if (t.startsWith("1Z")) return "UPS";
+  if (t.startsWith("420")) return "USPS";
+  if (t.startsWith("96") || t.startsWith("797")) return "FedEx";
+  return "Other";
+}
+
+/* multiplier x2 / 2x / x3 / 3x ... */
+function extractMultiplier(text) {
+  const s = String(text || "");
+  const m1 = s.match(/(?:^|[^0-9])x\s*(\d{1,2})(?!\d)/i);
+  if (m1) return Math.max(1, parseInt(m1[1], 10));
+  const m2 = s.match(/(\d{1,2})\s*x(?!\d)/i);
+  if (m2) return Math.max(1, parseInt(m2[1], 10));
+  return 1;
+}
+
+/* Determine if row is tracking-only */
+function isReturnLabelOrPackingSlip(partText, descText) {
+  const s = `${partText || ""} ${descText || ""}`.toLowerCase();
+  return s.includes("return label") || s.includes("packing slip");
+}
+
+/* Try column aliases so different exports still work */
+function getFirstField(row, candidates) {
+  for (const c of candidates) {
+    if (row[c] !== undefined && row[c] !== null && String(row[c]).trim() !== "") return row[c];
+  }
+  return "";
+}
+
+/* ---------- Chart ---------- */
 function makeChart(id, type, labels, values, label) {
   const canvas = document.getElementById(id);
   if (!canvas) return;
   if (charts[id]) charts[id].destroy();
 
   const palette = ["#00bfff", "#36cfc9", "#ffd666", "#ff7875", "#9254de", "#5cdbd3", "#73d13d", "#ffa940"];
-
-  const bg = Array.isArray(values) && values.length > 1
-    ? values.map((_, i) => palette[i % palette.length])
-    : "#00bfff";
+  const bg = (values?.length > 1) ? values.map((_, i) => palette[i % palette.length]) : "#00bfff";
 
   charts[id] = new Chart(canvas, {
     type,
@@ -168,94 +201,122 @@ function makeChart(id, type, labels, values, label) {
         legend: { labels: { color: "#f5f8ff", font: { size: 12 } } },
         tooltip: {
           callbacks: {
-            // FIX: no more object/object
-            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y ?? ctx.parsed}`
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed?.y ?? ctx.parsed}`
           }
         }
       },
-      scales: (type === "doughnut" || type === "pie")
-        ? {}
-        : {
-          x: { ticks: { color: "#f5f8ff" } },
-          y: { beginAtZero: true, ticks: { color: "#f5f8ff" } }
-        }
+      scales: (type === "doughnut" || type === "pie") ? {} : {
+        x: { ticks: { color: "#f5f8ff" } },
+        y: { beginAtZero: true, ticks: { color: "#f5f8ff" } }
+      }
     }
   });
 }
 
-/* ---------------- Compute from CSV ---------------- */
-function computeFromRows(rows) {
-  // rows expected fields (from WH CSV):
-  // Track Number, Part Number, PN Description, Created at, etc.
+/* ---------- Compute from WH CSV ---------- */
+function computeFromWhRows(rows) {
   const carrierScanCounts = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-  const trackingCounts = new Map(); // tracking -> scans
-  const trackingCarrier = new Map(); // tracking -> carrier (first seen)
-  const conditionParts = {}; // PN Description -> multiplier-aware parts count
-  const conditionRows = {};  // PN Description -> row count (optional)
-  const sample = [];
+  const trackingScanCounts = new Map(); // tracking -> scan rows count
+  const trackingCarrier = new Map();    // tracking -> carrier
+  const uniqueTrackingSet = new Set();
+
+  const conditionParts = {}; // PN Description -> parts (multiplier-aware)
+  let totalParts = 0;
+
+  const samples = [];
+
+  // Build per-tracking parts as well (optional future use)
+  // const partsByTracking = new Map();
 
   for (const r of rows) {
-    const tracking = safeStr(r["Track Number"]);
+    const tracking = normalizeTracking(getFirstField(r, [
+      "Track Number", "Tracking Number", "tracking_number", "track_number", "Tracking", "TRACKING"
+    ]));
     if (!tracking) continue;
 
     const carrier = classifyCarrier(tracking);
     carrierScanCounts[carrier] = (carrierScanCounts[carrier] || 0) + 1;
 
-    trackingCounts.set(tracking, (trackingCounts.get(tracking) || 0) + 1);
+    uniqueTrackingSet.add(tracking);
+    trackingScanCounts.set(tracking, (trackingScanCounts.get(tracking) || 0) + 1);
     if (!trackingCarrier.has(tracking)) trackingCarrier.set(tracking, carrier);
 
-    // return conditions
-    const desc = safeStr(r["PN Description"]) || "Unclassified";
-    conditionRows[desc] = (conditionRows[desc] || 0) + 1;
+    // Part fields
+    const partNumber = safeStr(getFirstField(r, [
+      "Part Number", "part_number", "PN", "pn", "Deposco PN", "deposco_pn"
+    ]));
+    const pnDesc = safeStr(getFirstField(r, [
+      "PN Description", "pn_description", "Description", "description"
+    ]));
 
-    // multiplier-aware parts count uses Part Number (your rule)
-    const pnRaw = safeStr(r["Part Number"]);
-    const mult = extractMultiplier(pnRaw);
-    conditionParts[desc] = (conditionParts[desc] || 0) + mult;
+    // Rule: Return Label / Packing Slip are TRACKING ONLY, NOT parts
+    const trackOnly = isReturnLabelOrPackingSlip(partNumber, pnDesc);
 
-    // samples (latest 25)
-    sample.push({ carrier, tracking });
+    // Always collect samples (for verification)
+    samples.push({ carrier, tracking });
+
+    if (!trackOnly) {
+      const mult = extractMultiplier(partNumber || pnDesc);
+      totalParts += mult;
+
+      const key = pnDesc || "Unclassified";
+      conditionParts[key] = (conditionParts[key] || 0) + mult;
+
+      // if (!partsByTracking.has(tracking)) partsByTracking.set(tracking, 0);
+      // partsByTracking.set(tracking, partsByTracking.get(tracking) + mult);
+    }
   }
 
-  // dupe tracking ids (unique tracking IDs that appear more than once)
+  const totalScans = Object.values(carrierScanCounts).reduce((a, b) => a + b, 0);
+
+  // Duplicates (tracking IDs that appear more than once)
   const dupes = [];
-  for (const [t, c] of trackingCounts.entries()) {
+  for (const [t, c] of trackingScanCounts.entries()) {
     if (c > 1) dupes.push({ tracking: t, scans: c, carrier: trackingCarrier.get(t) || classifyCarrier(t) });
   }
   dupes.sort((a, b) => b.scans - a.scans);
 
-  // latest 25 samples (end of file = most recent)
-  const last25 = sample.slice(-25).reverse();
+  // Latest 25 samples
+  const last25 = samples.slice(-25).reverse();
 
-  const totalScans = Object.values(carrierScanCounts).reduce((a, b) => a + b, 0);
+  // FedEx unique set for manifest compare
+  const whFedexUnique = new Set();
+  for (const t of uniqueTrackingSet.values()) {
+    if (classifyCarrier(t) === "FedEx") whFedexUnique.add(t);
+  }
 
   return {
     carrierScanCounts,
     totalScans,
+    totalParts,
+    uniqueTrackingCount: uniqueTrackingSet.size,
     repeatedTrackingCount: dupes.length,
-    dupesTop: dupes.slice(0, 80),
+    dupesTop: dupes.slice(0, 100),
     samples: last25,
     conditionParts,
-    conditionRows
+    whFedexUnique
   };
 }
 
-/* ---------------- Render ---------------- */
+/* ---------- Render Dashboard ---------- */
 function renderDashboard(computed) {
   kpiFedEx.textContent = fmtInt(computed.carrierScanCounts.FedEx || 0);
   kpiUPS.textContent = fmtInt(computed.carrierScanCounts.UPS || 0);
   kpiUSPS.textContent = fmtInt(computed.carrierScanCounts.USPS || 0);
   kpiOther.textContent = fmtInt(computed.carrierScanCounts.Other || 0);
 
-  kpiTotal.textContent = fmtInt(computed.totalScans || 0);
+  kpiTotalScans.textContent = fmtInt(computed.totalScans || 0);
+  kpiTotalParts.textContent = fmtInt(computed.totalParts || 0);
+
+  kpiUniqueTracking.textContent = fmtInt(computed.uniqueTrackingCount || 0);
   kpiDupes.textContent = fmtInt(computed.repeatedTrackingCount || 0);
 
-  // samples
+  // Samples
   trackingSamplesEl.innerHTML = "";
   computed.samples.forEach(s => {
     const div = document.createElement("div");
     div.className = "row";
-    div.innerHTML = `<span><span class="badge">${s.carrier}</span> &nbsp; ${s.tracking}</span>`;
+    div.innerHTML = `<span>${s.tracking}</span><span>${s.carrier}</span>`;
     trackingSamplesEl.appendChild(div);
   });
 
@@ -268,7 +329,7 @@ function renderDashboard(computed) {
     tbody.appendChild(tr);
   });
 
-  // carrier chart
+  // carrier scans chart
   makeChart(
     "chart_carriers",
     "bar",
@@ -283,9 +344,10 @@ function renderDashboard(computed) {
   );
 }
 
+/* ---------- Render Return Conditions ---------- */
 function renderConditions(computed) {
-  // Sort by parts desc
-  const entries = Object.entries(computed.conditionParts || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  const entries = Object.entries(computed.conditionParts || {})
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0));
   const labels = entries.map(e => e[0]);
   const values = entries.map(e => e[1]);
 
@@ -300,7 +362,7 @@ function renderConditions(computed) {
   });
 }
 
-/* ---------------- Manual Counts ---------------- */
+/* ---------- Manual Counts ---------- */
 const MANUAL_FIELDS = [
   "Good Racks",
   "Core Racks",
@@ -330,6 +392,7 @@ function renderManual() {
 
   const note = document.getElementById("manual_saved_note");
   note.textContent = state.manual._savedAt ? `Saved manual: ${state.manual._savedAt}` : "";
+
   renderRatios();
 }
 
@@ -359,14 +422,14 @@ function renderRatios() {
   });
 }
 
-/* ---------------- Carrier Log ---------------- */
+/* ---------- Carrier Log ---------- */
 function renderCarrierLog() {
   const tbody = document.querySelector("#table_carriers tbody");
   tbody.innerHTML = "";
 
   state.carrierLog.forEach((row, idx) => {
-    const tr = document.createElement("tr");
     const status = row.completedAt ? "Completed" : "Open";
+    const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${row.carrier}</td>
       <td>${fmtInt(row.qty)}</td>
@@ -374,14 +437,15 @@ function renderCarrierLog() {
       <td>${status}</td>
       <td>${row.completedAt ? new Date(row.completedAt).toLocaleString() : ""}</td>
       <td>
-        <button class="btn small" data-action="complete" data-idx="${idx}">${row.completedAt ? "Completed ✓" : "Complete"}</button>
+        <button class="btn small" data-action="complete" data-idx="${idx}">
+          ${row.completedAt ? "Completed ✓" : "Complete"}
+        </button>
         <button class="btn small danger" data-action="delete" data-idx="${idx}">Delete</button>
       </td>
     `;
     tbody.appendChild(tr);
   });
 
-  // chart: total qty per carrier
   const totals = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
   state.carrierLog.forEach(r => {
     const c = r.carrier || "Other";
@@ -397,14 +461,19 @@ function renderCarrierLog() {
   );
 }
 
-/* ---------------- Loose Parts ---------------- */
+/* ---------- Loose Parts ---------- */
 function renderLooseParts() {
   const tbody = document.querySelector("#table_loose tbody");
   tbody.innerHTML = "";
 
+  const totals = {};
+  state.looseParts.forEach(r => {
+    totals[r.condition] = (totals[r.condition] || 0) + 1;
+  });
+
   // newest first
   const sorted = [...state.looseParts].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  sorted.forEach((row, idxSorted) => {
+  sorted.forEach(row => {
     const idx = state.looseParts.findIndex(x => x.id === row.id);
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -415,78 +484,94 @@ function renderLooseParts() {
     `;
     tbody.appendChild(tr);
   });
+
+  const totalsBody = document.querySelector("#table_loose_totals tbody");
+  totalsBody.innerHTML = "";
+  Object.keys(totals).sort().forEach(k => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${k}</td><td>${fmtInt(totals[k])}</td>`;
+    totalsBody.appendChild(tr);
+  });
 }
 
-/* ---------------- Snapshots ---------------- */
-function renderSnapshotsList() {
-  const el = document.getElementById("snapshot_list");
-  el.innerHTML = "";
+/* ---------- Logs (Snapshots stored on-site) ---------- */
+function buildSnapshot(reason = "Manual Save") {
+  if (!state.computed) return null;
 
-  // newest first
-  const sorted = [...state.snapshots].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  // Carrier log totals
+  const carrierLogTotals = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
+  let carrierCompleted = 0;
+  state.carrierLog.forEach(r => {
+    carrierLogTotals[r.carrier] = (carrierLogTotals[r.carrier] || 0) + (Number(r.qty) || 0);
+    if (r.completedAt) carrierCompleted += 1;
+  });
+
+  // Loose totals
+  const looseTotals = {};
+  state.looseParts.forEach(r => {
+    looseTotals[r.condition] = (looseTotals[r.condition] || 0) + 1;
+  });
+
+  // Manual totals
+  const manualCounts = {};
+  MANUAL_FIELDS.forEach(k => manualCounts[k] = Number(state.manual[k] || 0));
+
+  const snap = {
+    id: crypto.randomUUID(),
+    date: dateStampLocal(),
+    createdAt: nowISO(),
+    reason,
+    summary: {
+      trackingScans: { ...state.computed.carrierScanCounts },
+      totalScans: state.computed.totalScans,
+      uniqueTracking: state.computed.uniqueTrackingCount,
+      repeatedTracking: state.computed.repeatedTrackingCount,
+
+      totalParts: state.computed.totalParts,
+      returnConditionsParts: { ...state.computed.conditionParts },
+
+      manualCounts,
+      carrierLogTotals,
+      carrierLogEntries: state.carrierLog.length,
+      carrierLogCompleted: carrierCompleted,
+
+      looseTotals,
+      looseEntries: state.looseParts.length
+    }
+  };
+
+  return snap;
+}
+
+function renderLogs() {
+  logsListEl.innerHTML = "";
+  const sorted = [...state.logs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
   if (!sorted.length) {
-    el.innerHTML = `<div class="row"><span class="badge">No snapshots yet</span></div>`;
+    logsListEl.innerHTML = `<div class="row"><span>No logs saved yet.</span></div>`;
+    logDetailsEl.textContent = "No log selected.";
     return;
   }
 
   sorted.forEach(s => {
     const div = document.createElement("div");
     div.className = "row";
+    div.style.cursor = "pointer";
     div.innerHTML = `
-      <span><span class="badge">${s.date}</span> ${new Date(s.createdAt).toLocaleString()}</span>
-      <span class="badge">Total Scans: ${fmtInt(s.summary?.tracking?.totalScans || 0)}</span>
+      <span>${s.date} • ${new Date(s.createdAt).toLocaleString()}</span>
+      <span>Total Parts: ${fmtInt(s.summary?.totalParts || 0)}</span>
     `;
-    el.appendChild(div);
+    div.addEventListener("click", () => {
+      logDetailsEl.textContent = JSON.stringify(s, null, 2);
+    });
+    logsListEl.appendChild(div);
   });
+
+  // default show latest
+  logDetailsEl.textContent = JSON.stringify(sorted[0], null, 2);
 }
 
-/* ---------------- Export (Preview -> PDF/Excel) ---------------- */
-function buildSummarySnapshot() {
-  const date = dateStampLocal();
-  const createdAt = nowISO();
-
-  const computed = state.computed;
-  const tracking = {
-    fedex: computed?.carrierScanCounts?.FedEx || 0,
-    ups: computed?.carrierScanCounts?.UPS || 0,
-    usps: computed?.carrierScanCounts?.USPS || 0,
-    other: computed?.carrierScanCounts?.Other || 0,
-    totalScans: computed?.totalScans || 0,
-    repeatedTrackingNumbers: computed?.repeatedTrackingCount || 0
-  };
-
-  // top return conditions (parts)
-  const condEntries = Object.entries(computed?.conditionParts || {})
-    .sort((a, b) => (b[1] || 0) - (a[1] || 0));
-
-  const conditionsTop = condEntries.slice(0, 12).map(([k, v]) => ({ condition: k, parts: v }));
-  const conditionsAll = condEntries.map(([k, v]) => ({ condition: k, parts: v }));
-
-  // manual totals
-  const manual = { ...state.manual };
-  delete manual._savedAt;
-
-  const manualTotals = MANUAL_FIELDS.reduce((sum, k) => sum + (Number(state.manual[k] || 0)), 0);
-
-  const carriersLogCount = state.carrierLog.length;
-  const loosePartsCount = state.looseParts.length;
-
-  return {
-    date,
-    createdAt,
-    summary: {
-      tracking,
-      returnConditionsTop: conditionsTop,
-      returnConditionsAll: conditionsAll,
-      manualCounts: manual,
-      manualEntries: MANUAL_FIELDS.length,
-      manualTotals,
-      carriersLogCount,
-      loosePartsCount
-    }
-  };
-}
-
+/* ---------- Export (PDF/Excel only — logs NOT included) ---------- */
 function summaryText(snapshot) {
   const s = snapshot.summary;
   const lines = [];
@@ -494,91 +579,51 @@ function summaryText(snapshot) {
   lines.push(`Date: ${snapshot.date}`);
   lines.push(`Computed: ${new Date(snapshot.createdAt).toLocaleString()}`);
   lines.push("");
-  lines.push(`Tracking Summary (Total Scans)`);
-  lines.push(`FedEx: ${fmtInt(s.tracking.fedex)}`);
-  lines.push(`UPS: ${fmtInt(s.tracking.ups)}`);
-  lines.push(`USPS: ${fmtInt(s.tracking.usps)}`);
-  lines.push(`Other: ${fmtInt(s.tracking.other)}`);
-  lines.push(`Total Scans: ${fmtInt(s.tracking.totalScans)}`);
-  lines.push(`Repeated Tracking Numbers: ${fmtInt(s.tracking.repeatedTrackingNumbers)}`);
+  lines.push(`Tracking (Total Scans)`);
+  lines.push(`FedEx: ${fmtInt(s.trackingScans.FedEx || 0)}`);
+  lines.push(`UPS: ${fmtInt(s.trackingScans.UPS || 0)}`);
+  lines.push(`USPS: ${fmtInt(s.trackingScans.USPS || 0)}`);
+  lines.push(`Other: ${fmtInt(s.trackingScans.Other || 0)}`);
+  lines.push(`Total Scans: ${fmtInt(s.totalScans || 0)}`);
+  lines.push(`Unique Tracking: ${fmtInt(s.uniqueTracking || 0)}`);
+  lines.push(`Repeated Tracking: ${fmtInt(s.repeatedTracking || 0)}`);
   lines.push("");
-  lines.push(`Return Conditions (Top)`);
-  s.returnConditionsTop.forEach(r => lines.push(`${r.condition}: ${fmtInt(r.parts)}`));
+  lines.push(`Parts (excludes Return Label / Packing Slip)`);
+  lines.push(`Total Parts: ${fmtInt(s.totalParts || 0)}`);
+  lines.push("");
+  lines.push(`Return Conditions (Parts)`);
+  const condEntries = Object.entries(s.returnConditionsParts || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  condEntries.slice(0, 15).forEach(([k, v]) => lines.push(`${k}: ${fmtInt(v)}`));
   lines.push("");
   lines.push(`Manual Counts`);
-  Object.entries(s.manualCounts).forEach(([k, v]) => lines.push(`${k}: ${fmtInt(v)}`));
+  MANUAL_FIELDS.forEach(k => lines.push(`${k}: ${fmtInt(s.manualCounts?.[k] || 0)}`));
   lines.push("");
-  lines.push(`Entries`);
-  lines.push(`Carriers entries: ${fmtInt(s.carriersLogCount)}`);
-  lines.push(`Loose Parts entries: ${fmtInt(s.loosePartsCount)}`);
+  lines.push(`Carrier Log Totals (manual)`);
+  ["FedEx","UPS","USPS","Other"].forEach(k => lines.push(`${k}: ${fmtInt(s.carrierLogTotals?.[k] || 0)}`));
+  lines.push(`Carrier Log Entries: ${fmtInt(s.carrierLogEntries || 0)} (Completed: ${fmtInt(s.carrierLogCompleted || 0)})`);
+  lines.push("");
+  lines.push(`Loose Parts`);
+  lines.push(`Loose Entries: ${fmtInt(s.looseEntries || 0)}`);
+  Object.entries(s.looseTotals || {}).forEach(([k, v]) => lines.push(`${k}: ${fmtInt(v)}`));
   return lines.join("\n");
 }
 
-function openExportModal() {
-  if (!state.computed) return;
-
-  const snap = buildSummarySnapshot();
-  exportPreview.textContent = summaryText(snap);
-
-  exportConfirm.checked = false;
-  exportPDFBtn.disabled = true;
-  exportExcelBtn.disabled = true;
-
-  exportModal.classList.add("show");
-  exportModal.setAttribute("aria-hidden", "false");
-
-  exportConfirm.onchange = () => {
-    const ok = exportConfirm.checked;
-    exportPDFBtn.disabled = !ok;
-    exportExcelBtn.disabled = !ok;
-  };
-
-  exportPDFBtn.onclick = () => {
-    saveSnapshot(snap);
-    exportPDF(snap);
-    closeExportModal();
-  };
-
-  exportExcelBtn.onclick = () => {
-    saveSnapshot(snap);
-    exportExcel(snap);
-    closeExportModal();
-  };
-}
-
-function closeExportModal() {
-  exportModal.classList.remove("show");
-  exportModal.setAttribute("aria-hidden", "true");
-}
-
-function saveSnapshot(snap) {
-  state.snapshots.push(snap);
-  saveLocal();
-  renderSnapshotsList();
-}
-
 function getLogoDataURL() {
-  // For PDF/Excel: grab <img> and draw to canvas
   const img = document.getElementById("da_logo");
   if (!img) return null;
-
   try {
     const c = document.createElement("canvas");
     c.width = img.naturalWidth || 128;
     c.height = img.naturalHeight || 128;
-    const ctx = c.getContext("2d");
-    ctx.drawImage(img, 0, 0);
+    c.getContext("2d").drawImage(img, 0, 0);
     return c.toDataURL("image/png");
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function exportPDF(snapshot) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "letter" });
 
-  // background header band
   doc.setFillColor(4, 26, 51);
   doc.rect(0, 0, 612, 90, "F");
 
@@ -593,53 +638,53 @@ function exportPDF(snapshot) {
   doc.setFontSize(11);
   doc.text(`Date: ${snapshot.date}`, 110, 64);
   doc.text(`Computed: ${new Date(snapshot.createdAt).toLocaleString()}`, 110, 80);
-
   doc.setTextColor(0, 0, 0);
 
   const s = snapshot.summary;
 
-  // Tracking table
   doc.autoTable({
     startY: 110,
     head: [["Tracking (Total Scans)", "Value"]],
     body: [
-      ["FedEx", s.tracking.fedex],
-      ["UPS", s.tracking.ups],
-      ["USPS", s.tracking.usps],
-      ["Other", s.tracking.other],
-      ["Total Scans", s.tracking.totalScans],
-      ["Repeated Tracking Numbers", s.tracking.repeatedTrackingNumbers]
+      ["FedEx", s.trackingScans.FedEx || 0],
+      ["UPS", s.trackingScans.UPS || 0],
+      ["USPS", s.trackingScans.USPS || 0],
+      ["Other", s.trackingScans.Other || 0],
+      ["Total Scans", s.totalScans || 0],
+      ["Unique Tracking", s.uniqueTracking || 0],
+      ["Repeated Tracking", s.repeatedTracking || 0],
     ],
     styles: { fontSize: 10 },
     headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
   });
 
-  // Conditions
   doc.autoTable({
     startY: doc.lastAutoTable.finalY + 14,
-    head: [["Return Conditions (Parts, multiplier-aware)", "Parts"]],
-    body: s.returnConditionsAll.slice(0, 30).map(r => [r.condition, r.parts]),
+    head: [["Parts", "Value"]],
+    body: [
+      ["Total Parts (excludes Return Label / Packing Slip)", s.totalParts || 0]
+    ],
     styles: { fontSize: 10 },
     headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
   });
 
-  // Manual counts
+  const condEntries = Object.entries(s.returnConditionsParts || {})
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .slice(0, 30)
+    .map(([k, v]) => [k, v]);
+
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 14,
+    head: [["Return Conditions (Parts)", "Parts"]],
+    body: condEntries,
+    styles: { fontSize: 10 },
+    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
+  });
+
   doc.autoTable({
     startY: doc.lastAutoTable.finalY + 14,
     head: [["Manual Counts", "Value"]],
-    body: MANUAL_FIELDS.map(k => [k, Number(s.manualCounts[k] || 0)]),
-    styles: { fontSize: 10 },
-    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
-  });
-
-  // Entries
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 14,
-    head: [["Entries", "Count"]],
-    body: [
-      ["Carriers entries", s.carriersLogCount],
-      ["Loose Parts entries", s.loosePartsCount]
-    ],
+    body: MANUAL_FIELDS.map(k => [k, Number(s.manualCounts?.[k] || 0)]),
     styles: { fontSize: 10 },
     headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
   });
@@ -651,47 +696,41 @@ function exportExcel(snapshot) {
   const wb = XLSX.utils.book_new();
   const s = snapshot.summary;
 
-  // Sheet 1: Summary
   const summaryRows = [
     ["RRPD Summary", ""],
     ["Date", snapshot.date],
     ["Computed", new Date(snapshot.createdAt).toLocaleString()],
     ["", ""],
     ["Tracking (Total Scans)", "Value"],
-    ["FedEx", s.tracking.fedex],
-    ["UPS", s.tracking.ups],
-    ["USPS", s.tracking.usps],
-    ["Other", s.tracking.other],
-    ["Total Scans", s.tracking.totalScans],
-    ["Repeated Tracking Numbers", s.tracking.repeatedTrackingNumbers],
+    ["FedEx", s.trackingScans.FedEx || 0],
+    ["UPS", s.trackingScans.UPS || 0],
+    ["USPS", s.trackingScans.USPS || 0],
+    ["Other", s.trackingScans.Other || 0],
+    ["Total Scans", s.totalScans || 0],
+    ["Unique Tracking", s.uniqueTracking || 0],
+    ["Repeated Tracking", s.repeatedTracking || 0],
     ["", ""],
-    ["Entries", "Count"],
-    ["Carriers entries", s.carriersLogCount],
-    ["Loose Parts entries", s.loosePartsCount]
+    ["Parts", "Value"],
+    ["Total Parts (excludes Return Label / Packing Slip)", s.totalParts || 0],
   ];
   const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
-
-  // Make tracking numbers not turn into scientific notation (for any future sheets)
-  // (we don’t export raw tracking list, but we still set base formatting)
-  ws1["!cols"] = [{ wch: 30 }, { wch: 30 }];
-
+  ws1["!cols"] = [{ wch: 42 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws1, "Summary");
 
-  // Sheet 2: Return Conditions
   const condRows = [["Condition", "Parts"]];
-  s.returnConditionsAll.forEach(r => condRows.push([r.condition, r.parts]));
+  Object.entries(s.returnConditionsParts || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .forEach(([k, v]) => condRows.push([k, v]));
   const ws2 = XLSX.utils.aoa_to_sheet(condRows);
-  ws2["!cols"] = [{ wch: 28 }, { wch: 12 }];
+  ws2["!cols"] = [{ wch: 32 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws2, "Return Conditions");
 
-  // Sheet 3: Manual Counts
   const manualRows = [["Metric", "Value"]];
-  MANUAL_FIELDS.forEach(k => manualRows.push([k, Number(s.manualCounts[k] || 0)]));
+  MANUAL_FIELDS.forEach(k => manualRows.push([k, Number(s.manualCounts?.[k] || 0)]));
   const ws3 = XLSX.utils.aoa_to_sheet(manualRows);
-  ws3["!cols"] = [{ wch: 30 }, { wch: 12 }];
+  ws3["!cols"] = [{ wch: 32 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws3, "Manual Counts");
 
-  // Sheet 4: Carriers Log
+  // Carriers log (manual)
   const clRows = [["Carrier", "Qty", "Received Date", "Status", "Completed At"]];
   state.carrierLog.forEach(r => {
     clRows.push([
@@ -706,7 +745,7 @@ function exportExcel(snapshot) {
   ws4["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, ws4, "Carriers");
 
-  // Sheet 5: Loose Parts
+  // Loose parts
   const lpRows = [["Date", "Part", "Condition"]];
   state.looseParts.forEach(r => lpRows.push([r.date || "", r.part || "", r.condition || ""]));
   const ws5 = XLSX.utils.aoa_to_sheet(lpRows);
@@ -716,7 +755,34 @@ function exportExcel(snapshot) {
   XLSX.writeFile(wb, `RRPD_Summary_${snapshot.date}.xlsx`);
 }
 
-/* ---------------- CSV Load ---------------- */
+/* ---------- Export Modal ---------- */
+function openExportModal() {
+  const snap = buildSnapshot("Export");
+  if (!snap) return;
+
+  exportPreview.textContent = summaryText(snap);
+  exportConfirm.checked = false;
+  exportPDFBtn.disabled = true;
+  exportExcelBtn.disabled = true;
+
+  exportModal.classList.add("show");
+  exportModal.setAttribute("aria-hidden", "false");
+
+  exportConfirm.onchange = () => {
+    const ok = exportConfirm.checked;
+    exportPDFBtn.disabled = !ok;
+    exportExcelBtn.disabled = !ok;
+  };
+
+  exportPDFBtn.onclick = () => { exportPDF(snap); closeExportModal(); };
+  exportExcelBtn.onclick = () => { exportExcel(snap); closeExportModal(); };
+}
+function closeExportModal() {
+  exportModal.classList.remove("show");
+  exportModal.setAttribute("aria-hidden", "true");
+}
+
+/* ---------- CSV Parse ---------- */
 function parseCSVFile(file) {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
@@ -728,37 +794,126 @@ function parseCSVFile(file) {
   });
 }
 
-async function handleUpload(file) {
-  statusEl.textContent = "Loading CSV…";
+/* ---------- WH Upload ---------- */
+async function handleWhUpload(file) {
+  statusEl.textContent = "Loading WH CSV…";
   try {
     const rows = await parseCSVFile(file);
-
-    // Normalize: ensure key names match exactly from WH export
-    state.rows = rows;
+    state.whRows = rows;
     state.loadedAt = nowISO();
-    state.computed = computeFromRows(rows);
+
+    state.computed = computeFromWhRows(rows);
 
     const ts = new Date();
     statusEl.textContent = `WH CSV loaded • ${fmtInt(rows.length)} rows • ${ts.toLocaleString()}`;
-    if (updatedSmall) updatedSmall.textContent = `Last loaded: ${ts.toLocaleString()}`;
+    updatedSmall.textContent = `Last loaded: ${ts.toLocaleString()}`;
 
     exportBtn.disabled = false;
+    saveLogBtn.disabled = false;
 
     renderDashboard(state.computed);
     renderConditions(state.computed);
 
+    // Update manifest KPI baseline
+    kpiWhFedexUnique.textContent = fmtInt(state.computed.whFedexUnique.size);
+
   } catch (e) {
     console.error(e);
-    statusEl.textContent = "CSV load failed — check file format.";
+    statusEl.textContent = "WH CSV load failed — check file format.";
   }
 }
 
-/* ---------------- Wire UI ---------------- */
+/* ---------- Manifest Compare (CSV) ---------- */
+function extractTrackingCandidatesFromRow(rowObj) {
+  // Grab ALL cell values, try to find tracking-like strings
+  const vals = Object.values(rowObj || {});
+  const out = [];
+  for (const v of vals) {
+    const t = normalizeTracking(v);
+    if (!t) continue;
+
+    // Filter obvious non-tracking (too short)
+    if (t.length < 6) continue;
+
+    // Keep only FedEx according to your rule (96... or 797...)
+    if (classifyCarrier(t) === "FedEx") out.push(t);
+  }
+  return out;
+}
+
+async function runManifestCompare() {
+  if (!state.computed) {
+    alert("Upload WH CSV first.");
+    return;
+  }
+  const file = manifestCsvInput.files?.[0];
+  if (!file) {
+    alert("Upload a FedEx Manifest CSV.");
+    return;
+  }
+
+  manifestMissingList.innerHTML = "";
+  manifestExtraList.innerHTML = "";
+
+  try {
+    const manifestRows = await parseCSVFile(file);
+
+    const manifestFedexSet = new Set();
+    for (const r of manifestRows) {
+      extractTrackingCandidatesFromRow(r).forEach(t => manifestFedexSet.add(t));
+    }
+
+    const whFedexSet = state.computed.whFedexUnique;
+
+    const missing = [];
+    for (const t of manifestFedexSet.values()) {
+      if (!whFedexSet.has(t)) missing.push(t);
+    }
+
+    const extra = [];
+    for (const t of whFedexSet.values()) {
+      if (!manifestFedexSet.has(t)) extra.push(t);
+    }
+
+    missing.sort();
+    extra.sort();
+
+    // KPIs
+    kpiManifestTotal.textContent = fmtInt(manifestFedexSet.size);
+    kpiWhFedexUnique.textContent = fmtInt(whFedexSet.size);
+    kpiMissingInWh.textContent = fmtInt(missing.length);
+    kpiExtraInWh.textContent = fmtInt(extra.length);
+
+    // Render lists
+    manifestMissingList.innerHTML = missing.length
+      ? missing.map(t => `<div class="row"><span>${t}</span></div>`).join("")
+      : `<div class="row"><span>None</span></div>`;
+
+    manifestExtraList.innerHTML = extra.length
+      ? extra.map(t => `<div class="row"><span>${t}</span></div>`).join("")
+      : `<div class="row"><span>None</span></div>`;
+
+  } catch (e) {
+    console.error(e);
+    alert("Manifest CSV failed to parse.");
+  }
+}
+
+function clearManifestUI() {
+  manifestCsvInput.value = "";
+  kpiManifestTotal.textContent = "0";
+  kpiMissingInWh.textContent = "0";
+  kpiExtraInWh.textContent = "0";
+  manifestMissingList.innerHTML = "";
+  manifestExtraList.innerHTML = "";
+}
+
+/* ---------- Wire UI ---------- */
 function wireUpload() {
-  uploadBtn.addEventListener("click", () => csvInput.click());
-  csvInput.addEventListener("change", e => {
+  whUploadBtn.addEventListener("click", () => whCsvInput.click());
+  whCsvInput.addEventListener("change", e => {
     const file = e.target.files?.[0];
-    if (file) handleUpload(file);
+    if (file) handleWhUpload(file);
   });
 }
 
@@ -767,6 +922,24 @@ function wireExport() {
   exportClose.addEventListener("click", closeExportModal);
   exportModal.addEventListener("click", e => {
     if (e.target === exportModal) closeExportModal();
+  });
+}
+
+function wireSaveLogs() {
+  saveLogBtn.addEventListener("click", () => {
+    const snap = buildSnapshot("Save to Logs");
+    if (!snap) return;
+    state.logs.push(snap);
+    saveLocal();
+    renderLogs();
+    alert("Saved to Logs.");
+  });
+
+  logsClearBtn.addEventListener("click", () => {
+    if (!confirm("Clear logs on this browser?")) return;
+    state.logs = [];
+    saveLocal();
+    renderLogs();
   });
 }
 
@@ -782,7 +955,7 @@ function wireManualButtons() {
   });
 
   document.getElementById("manual_clear").addEventListener("click", () => {
-    if (!confirm("Clear manual counts on this computer?")) return;
+    if (!confirm("Clear manual counts on this browser?")) return;
     state.manual = {};
     saveLocal();
     renderManual();
@@ -811,12 +984,11 @@ function wireCarrierLog() {
 
     saveLocal();
     renderCarrierLog();
-
     document.getElementById("carrier_qty").value = "";
   });
 
   clear.addEventListener("click", () => {
-    if (!confirm("Clear carrier log on this computer?")) return;
+    if (!confirm("Clear carrier log on this browser?")) return;
     state.carrierLog = [];
     saveLocal();
     renderCarrierLog();
@@ -838,7 +1010,6 @@ function wireCarrierLog() {
     }
 
     if (action === "complete") {
-      // toggle complete
       const row = state.carrierLog[idx];
       row.completedAt = row.completedAt ? null : nowISO();
       saveLocal();
@@ -868,12 +1039,11 @@ function wireLooseParts() {
 
     saveLocal();
     renderLooseParts();
-
     document.getElementById("loose_part").value = "";
   });
 
   clear.addEventListener("click", () => {
-    if (!confirm("Clear loose parts on this computer?")) return;
+    if (!confirm("Clear loose parts on this browser?")) return;
     state.looseParts = [];
     saveLocal();
     renderLooseParts();
@@ -890,21 +1060,44 @@ function wireLooseParts() {
   });
 }
 
-/* ---------------- Init ---------------- */
+function wireManifest() {
+  manifestRunBtn.addEventListener("click", runManifestCompare);
+  manifestClearBtn.addEventListener("click", clearManifestUI);
+}
+
+/* ---------- Init ---------- */
 function init() {
   wireTabs();
-  wireUpload();
-  wireExport();
-
   loadLocal();
+
+  // Render local pages
   renderManual();
   renderCarrierLog();
   renderLooseParts();
-  renderSnapshotsList();
+  renderLogs();
 
+  // Wire actions
+  wireUpload();
+  wireExport();
+  wireSaveLogs();
   wireManualButtons();
   wireCarrierLog();
   wireLooseParts();
+  wireManifest();
+
+  // Disable actions until WH loaded
+  exportBtn.disabled = true;
+  saveLogBtn.disabled = true;
+
+  // If logs exist, show latest
+  if (state.logs.length) {
+    logDetailsEl.textContent = JSON.stringify(
+      [...state.logs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0],
+      null, 2
+    );
+  } else {
+    logDetailsEl.textContent = "No log selected.";
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);
