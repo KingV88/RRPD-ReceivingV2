@@ -1,1 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RRPD Receiving Dashboard</title>
 
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- PDF export -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- Excel export (supports logo images) -->
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo" src="logo.png" alt="Logo" />
+      <div>
+        <div class="title">RRPD Receiving Dashboard</div>
+        <div class="subtitle" id="loadStatus">No WH CSV loaded</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <label class="btn">
+        Upload WH CSV
+        <input id="whCsvInput" type="file" accept=".csv" hidden />
+      </label>
+
+      <button class="btn secondary" id="saveToLogsBtn" disabled>Save to Logs</button>
+      <button class="btn primary" id="exportBtn" disabled>Export RRPD Summary</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <!-- REQUIRED ORDER -->
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="carriers">Carriers</button>
+    <button class="tab" data-tab="returns">Returns Condition</button>
+    <button class="tab" data-tab="manual">Manual Counts</button>
+    <button class="tab" data-tab="manifest">Manifest</button>
+    <button class="tab" data-tab="loose">Loose Parts</button>
+    <button class="tab" data-tab="logs">Logs</button>
+  </nav>
+
+  <main class="container">
+
+    <!-- DASHBOARD -->
+    <section class="panel active" id="panel-dashboard">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Tracking Counters (Total Scans)</div>
+          <div class="muted">
+            Tracking rows are ONLY Return Label / Packing Slip.
+            Parts are ANY other classification. Box pieces use x2/x3… (cap 50).
+          </div>
+
+          <div class="kpis five" style="margin-top:12px">
+            <div class="kpi">
+              <div class="kpi-label">FedEx</div>
+              <div class="kpi-value" id="kpiFedex">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">UPS</div>
+              <div class="kpi-value" id="kpiUps">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">USPS</div>
+              <div class="kpi-value" id="kpiUsps">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Other</div>
+              <div class="kpi-value" id="kpiOther">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Total Scans</div>
+              <div class="kpi-value" id="kpiTotalScans">0</div>
+            </div>
+          </div>
+
+          <div class="kpis three" style="margin-top:12px">
+            <div class="kpi">
+              <div class="kpi-label">Unique Tracking Numbers</div>
+              <div class="kpi-value" id="kpiUniqueTracking">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Total Parts (Pieces)</div>
+              <div class="kpi-value" id="kpiTotalParts">0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Boxes With Multiple Parts</div>
+              <div class="kpi-value" id="kpiMultiBoxes">0</div>
+            </div>
+          </div>
+
+          <div class="chart-wrap" style="margin-top:14px">
+            <div class="card-title">Carrier Scans (Bar)</div>
+            <canvas id="carrierBar"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Tracking Samples (Latest 25)</div>
+          <div class="muted">On-screen verification only. Exports are counts-only.</div>
+          <div class="list" id="trackingSamples"></div>
+
+          <div style="margin-top:16px">
+            <div class="card-title">Top Boxes by PART COUNT (Pieces)</div>
+            <div class="muted">This replaces “Repeated Tracking Numbers”. This is pieces, not rows.</div>
+            <div class="table-wrap">
+              <table class="table" id="topBoxesTable">
+                <thead>
+                  <tr>
+                    <th>Tracking</th>
+                    <th>Parts (Pieces)</th>
+                    <th>Carrier</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- CARRIERS -->
+    <section class="panel" id="panel-carriers">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Carrier Log</div>
+          <div class="muted">Log daily carrier receipts here (manual). Stored in logs.</div>
+
+          <div class="form-row">
+            <select id="carrierLogCarrier">
+              <option>FedEx</option>
+              <option>UPS</option>
+              <option>USPS</option>
+              <option>Other</option>
+            </select>
+
+            <input id="carrierLogQty" type="number" min="0" placeholder="Received qty" />
+            <input id="carrierLogDate" type="date" />
+            <button class="btn primary" id="addCarrierLogBtn">Add</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table" id="carrierLogTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Carrier</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                  <th style="width:180px">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Carrier Volume</div>
+          <div class="muted">Bar chart: total scans per carrier (from WH CSV tracking rows).</div>
+          <canvas id="carrierBar2"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- RETURNS -->
+    <section class="panel" id="panel-returns">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Return Conditions (Multiplier-aware)</div>
+          <div class="muted">Parts count uses x2/x3… only on Part rows.</div>
+          <canvas id="returnsDonut"></canvas>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Condition Totals</div>
+          <div class="table-wrap">
+            <table class="table" id="returnsTable">
+              <thead>
+                <tr>
+                  <th>Condition</th>
+                  <th>Parts (Pieces)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANUAL -->
+    <section class="panel" id="panel-manual">
+      <div class="card">
+        <div class="card-title">Manual Page (Racks / Axles / Drive Shafts / Gear Boxes)</div>
+        <div class="muted">
+          Enter counts. Ratios auto-calc vs counterpart.
+        </div>
+
+        <div class="grid three" style="margin-top:14px">
+          <div class="card sub">
+            <div class="card-title">Racks</div>
+            <div class="form-col">
+              <label>Good Racks <input id="m_good_racks" type="number" min="0"></label>
+              <label>Core Racks <input id="m_core_racks" type="number" min="0"></label>
+              <label>Good Electric Racks <input id="m_good_eracks" type="number" min="0"></label>
+              <label>Core Electric Racks <input id="m_core_eracks" type="number" min="0"></label>
+            </div>
+          </div>
+
+          <div class="card sub">
+            <div class="card-title">Axles / Drive Shafts</div>
+            <div class="form-col">
+              <label>Good Axles <input id="m_good_axles" type="number" min="0"></label>
+              <label>Used Axles <input id="m_used_axles" type="number" min="0"></label>
+              <label>Good Drive Shafts <input id="m_good_ds" type="number" min="0"></label>
+              <label>Used Drive Shafts <input id="m_used_ds" type="number" min="0"></label>
+            </div>
+          </div>
+
+          <div class="card sub">
+            <div class="card-title">Gear Boxes</div>
+            <div class="form-col">
+              <label>Good Gear boxes <input id="m_good_gb" type="number" min="0"></label>
+              <label>Used Gear boxes <input id="m_used_gb" type="number" min="0"></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:14px">
+          <button class="btn primary" id="saveManualBtn">Save Manual Counts</button>
+          <div class="muted" id="manualSavedMsg"></div>
+        </div>
+
+        <div class="grid two" style="margin-top:14px">
+          <div class="card sub">
+            <div class="card-title">Totals</div>
+            <div class="kpis four">
+              <div class="kpi"><div class="kpi-label">Racks Total</div><div class="kpi-value" id="manualTotalRacks">0</div></div>
+              <div class="kpi"><div class="kpi-label">Axles Total</div><div class="kpi-value" id="manualTotalAxles">0</div></div>
+              <div class="kpi"><div class="kpi-label">Drive Shafts Total</div><div class="kpi-value" id="manualTotalDS">0</div></div>
+              <div class="kpi"><div class="kpi-label">Gear Boxes Total</div><div class="kpi-value" id="manualTotalGB">0</div></div>
+            </div>
+          </div>
+
+          <div class="card sub">
+            <div class="card-title">Ratios</div>
+            <div class="table-wrap">
+              <table class="table" id="ratioTable">
+                <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANIFEST -->
+    <section class="panel" id="panel-manifest">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Manifest Upload (CSV)</div>
+          <div class="muted">
+            Upload a manifest CSV. Comparison focuses on FedEx only.
+          </div>
+          <div class="row" style="margin-top:12px">
+            <label class="btn">
+              Upload Manifest CSV
+              <input id="manifestCsvInput" type="file" accept=".csv" hidden />
+            </label>
+            <button class="btn secondary" id="clearManifestBtn">Clear Manifest</button>
+          </div>
+
+          <div class="kpis two" style="margin-top:12px">
+            <div class="kpi"><div class="kpi-label">Manifest FedEx IDs</div><div class="kpi-value" id="kpiManifestFedex">0</div></div>
+            <div class="kpi"><div class="kpi-label">WH FedEx IDs</div><div class="kpi-value" id="kpiWhFedex">0</div></div>
+          </div>
+
+          <div class="muted" style="margin-top:10px">
+            (This panel is NOT included in PDF/Excel export.)
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">FedEx Differences</div>
+          <div class="muted">Copy/paste friendly. “Missing in WH” means it exists on manifest but not scanned.</div>
+
+          <div class="grid two" style="margin-top:12px">
+            <div>
+              <div class="pill">Missing in WH</div>
+              <div class="list" id="missingInWh"></div>
+            </div>
+            <div>
+              <div class="pill">Missing in Manifest</div>
+              <div class="list" id="missingInManifest"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOOSE PARTS -->
+    <section class="panel" id="panel-loose">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Loose Part Entry</div>
+          <div class="muted">Enter loose parts manually (dated). Stored in logs.</div>
+
+          <div class="form-row">
+            <input id="loosePartPn" placeholder="Part number (can be S- / R- / etc)" />
+            <select id="loosePartCond">
+              <option>Good</option>
+              <option>Core</option>
+              <option>Used</option>
+              <option>Missing</option>
+              <option>Not Our Part</option>
+            </select>
+            <input id="loosePartDate" type="date" />
+            <button class="btn primary" id="addLooseBtn">Add</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table" id="looseTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Part Number</th>
+                  <th>Condition</th>
+                  <th style="width:120px">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Loose Parts Totals (Names only)</div>
+          <div class="muted">No graph required.</div>
+          <div class="table-wrap">
+            <table class="table" id="looseTotalsTable">
+              <thead><tr><th>Condition</th><th>Count</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section class="panel" id="panel-logs">
+      <div class="grid two">
+        <div class="card">
+          <div class="card-title">Saved Logs</div>
+          <div class="muted">
+            Logs stay online (local device via browser storage). Owner can view history here.
+          </div>
+          <div class="table-wrap" style="margin-top:12px">
+            <table class="table" id="logsTable">
+              <thead>
+                <tr>
+                  <th>Work Date</th>
+                  <th>Saved At</th>
+                  <th>Total Scans</th>
+                  <th>Total Parts</th>
+                  <th style="width:180px">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Log Details</div>
+          <div class="muted" id="logDetailsHint">Select a log to preview.</div>
+          <pre class="pre" id="logDetails"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- EXPORT MODAL -->
+  <div class="modal hidden" id="exportModal">
+    <div class="modal-card">
+      <div class="modal-title">RRPD Summary (Preview)</div>
+      <div class="muted">Confirm the snapshot before exporting.</div>
+
+      <div class="pre" id="exportPreview"></div>
+
+      <label class="check">
+        <input type="checkbox" id="confirmExportChk" />
+        I confirm this snapshot is correct.
+      </label>
+
+      <div class="row right" style="margin-top:12px">
+        <button class="btn secondary" id="cancelExportBtn">Cancel</button>
+        <button class="btn secondary" id="exportPdfBtn" disabled>Export PDF</button>
+        <button class="btn primary" id="exportXlsxBtn" disabled>Export Excel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
