@@ -1,1103 +1,1033 @@
-console.log("RRPD v3 script loaded");
+/* RRPD Receiving Dashboard
+   Core rules:
+   - Tracking rows = classification is Return Label or Packing Slip
+   - Part rows = everything else
+   - Part pieces use multiplier parsing x2 / 2x etc, cap 50
+   - Carrier from tracking format:
+     UPS: 1Z...
+     USPS: 94/93/92/95... or 420...
+     FedEx: 96... or 797...
+     Other: everything else
+*/
 
-/* ---------- DOM ---------- */
-const statusEl = document.getElementById("status_text");
-const updatedSmall = document.getElementById("updated_small");
-
-const whCsvInput = document.getElementById("wh_csv_input");
-const whUploadBtn = document.getElementById("wh_upload_btn");
-
-const saveLogBtn = document.getElementById("save_log_btn");
-const exportBtn = document.getElementById("export_btn");
-
-/* Dashboard KPI */
-const kpiFedEx = document.getElementById("kpi_fedex");
-const kpiUPS = document.getElementById("kpi_ups");
-const kpiUSPS = document.getElementById("kpi_usps");
-const kpiOther = document.getElementById("kpi_other");
-const kpiTotalScans = document.getElementById("kpi_total_scans");
-const kpiTotalParts = document.getElementById("kpi_total_parts");
-const kpiUniqueTracking = document.getElementById("kpi_unique_tracking");
-const kpiDupes = document.getElementById("kpi_dupes");
-
-const trackingSamplesEl = document.getElementById("tracking_samples");
-
-/* Manifest */
-const manifestCsvInput = document.getElementById("manifest_csv_input");
-const manifestRunBtn = document.getElementById("manifest_run");
-const manifestClearBtn = document.getElementById("manifest_clear");
-
-const kpiManifestTotal = document.getElementById("kpi_manifest_total");
-const kpiWhFedexUnique = document.getElementById("kpi_wh_fedex_unique");
-const kpiMissingInWh = document.getElementById("kpi_missing_in_wh");
-const kpiExtraInWh = document.getElementById("kpi_extra_in_wh");
-
-const manifestMissingList = document.getElementById("manifest_missing_list");
-const manifestExtraList = document.getElementById("manifest_extra_list");
-
-/* Logs */
-const logsListEl = document.getElementById("logs_list");
-const logDetailsEl = document.getElementById("log_details");
-const logsClearBtn = document.getElementById("logs_clear");
-
-/* Export modal */
-const exportModal = document.getElementById("export_modal");
-const exportClose = document.getElementById("export_close");
-const exportPreview = document.getElementById("export_preview");
-const exportConfirm = document.getElementById("export_confirm");
-const exportPDFBtn = document.getElementById("export_pdf");
-const exportExcelBtn = document.getElementById("export_excel");
-
-/* ---------- State ---------- */
-let charts = {};
 const LS_KEYS = {
-  manual: "rrpd_manual_counts_v3",
-  carriers: "rrpd_carrier_log_v3",
-  loose: "rrpd_loose_parts_v3",
-  logs: "rrpd_logs_v3"
+  manual: "rrpd_manual_v1",
+  carriers: "rrpd_carrier_log_v1",
+  loose: "rrpd_loose_parts_v1",
+  logs: "rrpd_logs_v1",
 };
 
-let state = {
-  whRows: [],
-  computed: null,
-  loadedAt: null,
+let whRows = [];
+let whMeta = { loadedAt: null, filename: null };
 
-  manual: {},
-  carrierLog: [],
-  looseParts: [],
+let manifestRows = [];
+let charts = {};
 
-  logs: [],
+const $ = (id) => document.getElementById(id);
 
-  manifest: {
-    loaded: false,
-    fedexManifestSet: new Set(),
-    missingInWh: [],
-    extraInWh: []
-  }
-};
-
-/* ---------- Tabs ---------- */
-function wireTabs() {
-  const tabButtons = document.querySelectorAll(".tab-btn");
-  const tabs = document.querySelectorAll(".tab");
-
-  tabButtons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      const target = btn.dataset.target;
-      tabButtons.forEach(b => b.classList.remove("active"));
-      tabs.forEach(t => t.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById(target)?.classList.add("active");
-    });
-  });
-}
-
-/* ---------- Local Storage ---------- */
-function loadLocal() {
-  try {
-    state.manual = JSON.parse(localStorage.getItem(LS_KEYS.manual) || "{}");
-    state.carrierLog = JSON.parse(localStorage.getItem(LS_KEYS.carriers) || "[]");
-    state.looseParts = JSON.parse(localStorage.getItem(LS_KEYS.loose) || "[]");
-    state.logs = JSON.parse(localStorage.getItem(LS_KEYS.logs) || "[]");
-  } catch {
-    state.manual = {};
-    state.carrierLog = [];
-    state.looseParts = [];
-    state.logs = [];
-  }
-}
-function saveLocal() {
-  localStorage.setItem(LS_KEYS.manual, JSON.stringify(state.manual));
-  localStorage.setItem(LS_KEYS.carriers, JSON.stringify(state.carrierLog));
-  localStorage.setItem(LS_KEYS.loose, JSON.stringify(state.looseParts));
-  localStorage.setItem(LS_KEYS.logs, JSON.stringify(state.logs));
-}
-
-/* ---------- Helpers ---------- */
-function fmtInt(n) {
-  return (Number(n) || 0).toLocaleString();
-}
-function nowISO() {
+function nowIso(){
   return new Date().toISOString();
 }
-function dateStampLocal() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-function safeStr(v) {
-  const s = String(v ?? "").trim();
-  return s.length ? s : "";
-}
-function normalizeTracking(v) {
-  // keep as text, strip spaces and trailing .0, fix scientific-looking strings by leaving as-is
-  let t = safeStr(v);
-  t = t.replace(/\s+/g, "");
-  t = t.replace(/\.0$/, "");
-  return t;
+
+function fmtInt(n){
+  return (n ?? 0).toLocaleString("en-US");
 }
 
-/* Carrier rules (yours) */
-function classifyCarrier(trackingRaw) {
-  const t = normalizeTracking(trackingRaw).toUpperCase();
-  if (!t) return "Other";
-  if (t.startsWith("1Z")) return "UPS";
-  if (t.startsWith("420")) return "USPS";
-  if (t.startsWith("96") || t.startsWith("797")) return "FedEx";
-  return "Other";
+function safeStr(v){
+  if (v === null || v === undefined) return "";
+  return String(v).trim();
 }
 
-/* multiplier x2 / 2x / x3 / 3x ... */
-function extractMultiplier(text) {
-  const s = String(text || "");
-  const m1 = s.match(/(?:^|[^0-9])x\s*(\d{1,2})(?!\d)/i);
-  if (m1) return Math.max(1, parseInt(m1[1], 10));
-  const m2 = s.match(/(\d{1,2})\s*x(?!\d)/i);
-  if (m2) return Math.max(1, parseInt(m2[1], 10));
-  return 1;
+function normalizeHeader(h){
+  return safeStr(h).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g,"");
 }
 
-/* Determine if row is tracking-only */
-function isReturnLabelOrPackingSlip(partText, descText) {
-  const s = `${partText || ""} ${descText || ""}`.toLowerCase();
+function isTrackingClassification(cls){
+  const s = safeStr(cls).toLowerCase();
   return s.includes("return label") || s.includes("packing slip");
 }
 
-/* Try column aliases so different exports still work */
-function getFirstField(row, candidates) {
-  for (const c of candidates) {
-    if (row[c] !== undefined && row[c] !== null && String(row[c]).trim() !== "") return row[c];
-  }
-  return "";
+function parseMultiplier(text){
+  const s = safeStr(text);
+  if (!s) return 1;
+
+  // match "...x10" or "... x10"
+  let m = s.match(/(?:^|[^0-9])x\s*(\d{1,3})(?:$|[^0-9])/i);
+  // match "10x..." or "10x ..."
+  let m2 = s.match(/(?:^|[^0-9])(\d{1,3})\s*x(?:$|[^0-9])/i);
+
+  let mult = 1;
+  if (m && m[1]) mult = parseInt(m[1], 10);
+  else if (m2 && m2[1]) mult = parseInt(m2[1], 10);
+
+  if (!Number.isFinite(mult) || mult < 1) mult = 1;
+  if (mult > 50) mult = 50;
+  return mult;
 }
 
-/* ---------- Chart ---------- */
-function makeChart(id, type, labels, values, label) {
-  const canvas = document.getElementById(id);
-  if (!canvas) return;
-  if (charts[id]) charts[id].destroy();
+function looksLikeUps(t){ return /^1Z/i.test(t); }
+function looksLikeFedex(t){ return /^96/.test(t) || /^797/.test(t); }
+function looksLikeUsps(t){ return /^(94|93|92|95)/.test(t) || /^420/.test(t); }
 
-  const palette = ["#00bfff", "#36cfc9", "#ffd666", "#ff7875", "#9254de", "#5cdbd3", "#73d13d", "#ffa940"];
-  const bg = (values?.length > 1) ? values.map((_, i) => palette[i % palette.length]) : "#00bfff";
+function classifyCarrier(tracking){
+  const t = safeStr(tracking).replace(/\s+/g,"");
+  if (!t) return "Other";
+  if (looksLikeUps(t)) return "UPS";
+  if (looksLikeUsps(t)) return "USPS";
+  if (looksLikeFedex(t)) return "FedEx";
+  return "Other";
+}
 
-  charts[id] = new Chart(canvas, {
-    type,
-    data: {
-      labels,
-      datasets: [{
-        label,
-        data: values,
-        backgroundColor: bg,
-        borderColor: "#001529",
-        borderWidth: 1.2
+/* Attempt to undo scientific notation strings like "1.96367E+11".
+   IMPORTANT: If the source CSV truly contains scientific notation, digits may already be lost.
+   This at least turns it into a stable integer string when possible.
+*/
+function sciToIntString(s){
+  const t = safeStr(s);
+  if (!/e\+?/i.test(t)) return t;
+
+  const m = t.match(/^([0-9]+)(?:\.([0-9]+))?e\+?([0-9]+)$/i);
+  if (!m) return t;
+
+  const intPart = m[1];
+  const fracPart = m[2] || "";
+  const exp = parseInt(m[3], 10);
+
+  const digits = intPart + fracPart;
+  const fracLen = fracPart.length;
+
+  // shift decimal right by exp
+  const zeros = exp - fracLen;
+  if (zeros >= 0){
+    return digits + "0".repeat(zeros);
+  }
+  // need to insert decimal (we don't want decimals for IDs, so fallback)
+  return digits.slice(0, digits.length + zeros);
+}
+
+function detectColumns(rows){
+  // returns object with best-guess keys for:
+  // tracking, classification, partNumber, condition
+  if (!rows.length) return {};
+
+  const keys = Object.keys(rows[0]);
+  const norm = keys.map(k => ({ raw:k, n: normalizeHeader(k) }));
+
+  const find = (preds) => {
+    for (const p of preds){
+      const hit = norm.find(x => p.test(x.n));
+      if (hit) return hit.raw;
+    }
+    return null;
+  };
+
+  const tracking =
+    find([/tracking/,/tracking_number/,/trackingid/,/tracking_id/,/tn/]) ||
+    keys[0];
+
+  const classification =
+    find([/pn_description/,/description/,/classification/,/class/]) ||
+    null;
+
+  const partNumber =
+    find([/part_number/,/^part$/,/^pn$/,/partnumber/]) ||
+    null;
+
+  const condition =
+    find([/^status$/,/condition/,/return_condition/]) ||
+    null;
+
+  return { tracking, classification, partNumber, condition };
+}
+
+function buildModel(rows){
+  const cols = detectColumns(rows);
+
+  // normalize each row into a consistent shape
+  const norm = rows.map(r => {
+    const trackingRaw = sciToIntString(safeStr(r[cols.tracking]));
+    const classification = safeStr(cols.classification ? r[cols.classification] : "");
+    const partNumber = safeStr(cols.partNumber ? r[cols.partNumber] : "");
+    const condition = safeStr(cols.condition ? r[cols.condition] : "");
+
+    const isTrackingRow = isTrackingClassification(classification);
+
+    return {
+      tracking: trackingRaw,
+      carrier: classifyCarrier(trackingRaw),
+      classification,
+      isTrackingRow,
+      isPartRow: !isTrackingRow,
+      partNumber,
+      condition: condition || (isTrackingRow ? "" : "Unclassified"),
+      multiplier: !isTrackingRow ? parseMultiplier(partNumber || classification) : 0,
+    };
+  });
+
+  return { cols, rows: norm };
+}
+
+function aggregate(model){
+  const all = model.rows;
+
+  const totalScans = all.length;
+
+  // Only tracking rows count toward tracking/carrier scan counters
+  const trackingRows = all.filter(r => r.isTrackingRow && r.tracking);
+  const uniqueTracking = new Set(trackingRows.map(r => r.tracking));
+
+  const carrierCounts = { FedEx:0, UPS:0, USPS:0, Other:0 };
+  for (const r of trackingRows){
+    carrierCounts[r.carrier] = (carrierCounts[r.carrier] || 0) + 1;
+  }
+
+  // PARTS (pieces) = sum multipliers for PART rows, grouped by tracking box
+  const partRows = all.filter(r => r.isPartRow && r.tracking);
+
+  const partsByTracking = new Map(); // tracking -> { pieces, carrier }
+  for (const r of partRows){
+    const key = r.tracking;
+    const cur = partsByTracking.get(key) || { pieces:0, carrier: classifyCarrier(key) };
+    const add = r.multiplier || 1;
+    cur.pieces += add;
+    partsByTracking.set(key, cur);
+  }
+
+  const totalParts = Array.from(partsByTracking.values()).reduce((a,b)=>a+b.pieces,0);
+
+  const boxesWithMultipleParts = Array.from(partsByTracking.values()).filter(x=>x.pieces>1).length;
+
+  // Conditions (for PART rows only)
+  const condTotals = new Map(); // condition -> pieces
+  for (const r of partRows){
+    const c = r.condition || "Unclassified";
+    const add = r.multiplier || 1;
+    condTotals.set(c, (condTotals.get(c)||0) + add);
+  }
+
+  // Latest samples (tracking rows first; if none, use any)
+  const samples = trackingRows.slice(-25).reverse();
+
+  // Top boxes by part count
+  const topBoxes = Array.from(partsByTracking.entries())
+    .map(([tracking, v]) => ({ tracking, pieces: v.pieces, carrier: v.carrier }))
+    .sort((a,b)=>b.pieces - a.pieces)
+    .slice(0, 25);
+
+  return {
+    totalScans,
+    trackingRowsCount: trackingRows.length,
+    uniqueTrackingCount: uniqueTracking.size,
+    carrierCounts,
+    totalParts,
+    boxesWithMultipleParts,
+    condTotals,
+    samples,
+    topBoxes
+  };
+}
+
+function destroyChart(id){
+  if (charts[id]){
+    charts[id].destroy();
+    charts[id] = null;
+  }
+}
+
+function renderDashboard(agg){
+  $("kpiFedex").textContent = fmtInt(agg.carrierCounts.FedEx);
+  $("kpiUps").textContent = fmtInt(agg.carrierCounts.UPS);
+  $("kpiUsps").textContent = fmtInt(agg.carrierCounts.USPS);
+  $("kpiOther").textContent = fmtInt(agg.carrierCounts.Other);
+  $("kpiTotalScans").textContent = fmtInt(agg.totalScans);
+
+  $("kpiUniqueTracking").textContent = fmtInt(agg.uniqueTrackingCount);
+  $("kpiTotalParts").textContent = fmtInt(agg.totalParts);
+  $("kpiMultiBoxes").textContent = fmtInt(agg.boxesWithMultipleParts);
+
+  // samples
+  const sWrap = $("trackingSamples");
+  sWrap.innerHTML = "";
+  for (const r of agg.samples){
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `<span><span class="tag">${r.carrier}</span> • ${r.tracking}</span>`;
+    sWrap.appendChild(div);
+  }
+
+  // top boxes
+  const tb = $("topBoxesTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const b of agg.topBoxes){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-family:ui-monospace,monospace;font-size:12px">${b.tracking}</td>
+      <td><b>${fmtInt(b.pieces)}</b></td>
+      <td>${b.carrier}</td>
+    `;
+    tb.appendChild(tr);
+  }
+
+  // carrier bar
+  destroyChart("carrierBar");
+  charts["carrierBar"] = new Chart($("carrierBar"),{
+    type:"bar",
+    data:{
+      labels:["FedEx","UPS","USPS","Other"],
+      datasets:[{
+        label:"Total Scans",
+        data:[agg.carrierCounts.FedEx, agg.carrierCounts.UPS, agg.carrierCounts.USPS, agg.carrierCounts.Other]
       }]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: "#f5f8ff", font: { size: 12 } } },
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.dataset.label}: ${ctx.parsed?.y ?? ctx.parsed}`
-          }
-        }
-      },
-      scales: (type === "doughnut" || type === "pie") ? {} : {
-        x: { ticks: { color: "#f5f8ff" } },
-        y: { beginAtZero: true, ticks: { color: "#f5f8ff" } }
+    options:{
+      responsive:true,
+      plugins:{ legend:{ labels:{ color:"#eaf2ff" } } },
+      scales:{
+        x:{ ticks:{ color:"#eaf2ff" }, grid:{ color:"rgba(255,255,255,.08)" } },
+        y:{ ticks:{ color:"#eaf2ff" }, grid:{ color:"rgba(255,255,255,.08)" } },
+      }
+    }
+  });
+
+  // carriers tab bar (same dataset)
+  destroyChart("carrierBar2");
+  charts["carrierBar2"] = new Chart($("carrierBar2"),{
+    type:"bar",
+    data:{
+      labels:["FedEx","UPS","USPS","Other"],
+      datasets:[{
+        label:"Total Scans",
+        data:[agg.carrierCounts.FedEx, agg.carrierCounts.UPS, agg.carrierCounts.USPS, agg.carrierCounts.Other]
+      }]
+    },
+    options:{
+      responsive:true,
+      plugins:{ legend:{ labels:{ color:"#eaf2ff" } } },
+      scales:{
+        x:{ ticks:{ color:"#eaf2ff" }, grid:{ color:"rgba(255,255,255,.08)" } },
+        y:{ ticks:{ color:"#eaf2ff" }, grid:{ color:"rgba(255,255,255,.08)" } },
       }
     }
   });
 }
 
-/* ---------- Compute from WH CSV ---------- */
-function computeFromWhRows(rows) {
-  const carrierScanCounts = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-  const trackingScanCounts = new Map(); // tracking -> scan rows count
-  const trackingCarrier = new Map();    // tracking -> carrier
-  const uniqueTrackingSet = new Set();
+function renderReturns(agg){
+  const rows = Array.from(agg.condTotals.entries())
+    .map(([k,v])=>({k,v}))
+    .sort((a,b)=>b.v-a.v);
 
-  const conditionParts = {}; // PN Description -> parts (multiplier-aware)
-  let totalParts = 0;
+  // table
+  const tb = $("returnsTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const r of rows){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.k}</td><td><b>${fmtInt(r.v)}</b></td>`;
+    tb.appendChild(tr);
+  }
 
-  const samples = [];
-
-  // Build per-tracking parts as well (optional future use)
-  // const partsByTracking = new Map();
-
-  for (const r of rows) {
-    const tracking = normalizeTracking(getFirstField(r, [
-      "Track Number", "Tracking Number", "tracking_number", "track_number", "Tracking", "TRACKING"
-    ]));
-    if (!tracking) continue;
-
-    const carrier = classifyCarrier(tracking);
-    carrierScanCounts[carrier] = (carrierScanCounts[carrier] || 0) + 1;
-
-    uniqueTrackingSet.add(tracking);
-    trackingScanCounts.set(tracking, (trackingScanCounts.get(tracking) || 0) + 1);
-    if (!trackingCarrier.has(tracking)) trackingCarrier.set(tracking, carrier);
-
-    // Part fields
-    const partNumber = safeStr(getFirstField(r, [
-      "Part Number", "part_number", "PN", "pn", "Deposco PN", "deposco_pn"
-    ]));
-    const pnDesc = safeStr(getFirstField(r, [
-      "PN Description", "pn_description", "Description", "description"
-    ]));
-
-    // Rule: Return Label / Packing Slip are TRACKING ONLY, NOT parts
-    const trackOnly = isReturnLabelOrPackingSlip(partNumber, pnDesc);
-
-    // Always collect samples (for verification)
-    samples.push({ carrier, tracking });
-
-    if (!trackOnly) {
-      const mult = extractMultiplier(partNumber || pnDesc);
-      totalParts += mult;
-
-      const key = pnDesc || "Unclassified";
-      conditionParts[key] = (conditionParts[key] || 0) + mult;
-
-      // if (!partsByTracking.has(tracking)) partsByTracking.set(tracking, 0);
-      // partsByTracking.set(tracking, partsByTracking.get(tracking) + mult);
+  // donut
+  destroyChart("returnsDonut");
+  charts["returnsDonut"] = new Chart($("returnsDonut"),{
+    type:"doughnut",
+    data:{
+      labels: rows.map(r=>r.k),
+      datasets:[{ data: rows.map(r=>r.v) }]
+    },
+    options:{
+      responsive:true,
+      plugins:{ legend:{ labels:{ color:"#eaf2ff" } } }
     }
-  }
-
-  const totalScans = Object.values(carrierScanCounts).reduce((a, b) => a + b, 0);
-
-  // Duplicates (tracking IDs that appear more than once)
-  const dupes = [];
-  for (const [t, c] of trackingScanCounts.entries()) {
-    if (c > 1) dupes.push({ tracking: t, scans: c, carrier: trackingCarrier.get(t) || classifyCarrier(t) });
-  }
-  dupes.sort((a, b) => b.scans - a.scans);
-
-  // Latest 25 samples
-  const last25 = samples.slice(-25).reverse();
-
-  // FedEx unique set for manifest compare
-  const whFedexUnique = new Set();
-  for (const t of uniqueTrackingSet.values()) {
-    if (classifyCarrier(t) === "FedEx") whFedexUnique.add(t);
-  }
-
-  return {
-    carrierScanCounts,
-    totalScans,
-    totalParts,
-    uniqueTrackingCount: uniqueTrackingSet.size,
-    repeatedTrackingCount: dupes.length,
-    dupesTop: dupes.slice(0, 100),
-    samples: last25,
-    conditionParts,
-    whFedexUnique
-  };
-}
-
-/* ---------- Render Dashboard ---------- */
-function renderDashboard(computed) {
-  kpiFedEx.textContent = fmtInt(computed.carrierScanCounts.FedEx || 0);
-  kpiUPS.textContent = fmtInt(computed.carrierScanCounts.UPS || 0);
-  kpiUSPS.textContent = fmtInt(computed.carrierScanCounts.USPS || 0);
-  kpiOther.textContent = fmtInt(computed.carrierScanCounts.Other || 0);
-
-  kpiTotalScans.textContent = fmtInt(computed.totalScans || 0);
-  kpiTotalParts.textContent = fmtInt(computed.totalParts || 0);
-
-  kpiUniqueTracking.textContent = fmtInt(computed.uniqueTrackingCount || 0);
-  kpiDupes.textContent = fmtInt(computed.repeatedTrackingCount || 0);
-
-  // Samples
-  trackingSamplesEl.innerHTML = "";
-  computed.samples.forEach(s => {
-    const div = document.createElement("div");
-    div.className = "row";
-    div.innerHTML = `<span>${s.tracking}</span><span>${s.carrier}</span>`;
-    trackingSamplesEl.appendChild(div);
-  });
-
-  // dupes table
-  const tbody = document.querySelector("#table_dupes tbody");
-  tbody.innerHTML = "";
-  computed.dupesTop.forEach(d => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.tracking}</td><td>${fmtInt(d.scans)}</td><td>${d.carrier}</td>`;
-    tbody.appendChild(tr);
-  });
-
-  // carrier scans chart
-  makeChart(
-    "chart_carriers",
-    "bar",
-    ["FedEx", "UPS", "USPS", "Other"],
-    [
-      computed.carrierScanCounts.FedEx || 0,
-      computed.carrierScanCounts.UPS || 0,
-      computed.carrierScanCounts.USPS || 0,
-      computed.carrierScanCounts.Other || 0
-    ],
-    "Total Scans"
-  );
-}
-
-/* ---------- Render Return Conditions ---------- */
-function renderConditions(computed) {
-  const entries = Object.entries(computed.conditionParts || {})
-    .sort((a, b) => (b[1] || 0) - (a[1] || 0));
-  const labels = entries.map(e => e[0]);
-  const values = entries.map(e => e[1]);
-
-  makeChart("chart_conditions", "doughnut", labels, values, "Parts");
-
-  const tbody = document.querySelector("#table_conditions tbody");
-  tbody.innerHTML = "";
-  entries.forEach(([cond, parts]) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${cond}</td><td>${fmtInt(parts)}</td>`;
-    tbody.appendChild(tr);
   });
 }
 
-/* ---------- Manual Counts ---------- */
-const MANUAL_FIELDS = [
-  "Good Racks",
-  "Core Racks",
-  "Good Electric Racks",
-  "Core Electric Racks",
-  "Good Axles",
-  "Used Axles",
-  "Good Drive Shafts",
-  "Used Drive Shafts",
-  "Good Gear boxes",
-  "Used Gear boxes"
-];
-
-function renderManual() {
-  const grid = document.getElementById("manual_grid");
-  grid.innerHTML = "";
-
-  MANUAL_FIELDS.forEach(key => {
-    const wrap = document.createElement("div");
-    wrap.className = "manual-item";
-    wrap.innerHTML = `
-      <label>${key}</label>
-      <input type="number" min="0" data-manual-key="${key}" value="${Number(state.manual[key] || 0)}" />
-    `;
-    grid.appendChild(wrap);
-  });
-
-  const note = document.getElementById("manual_saved_note");
-  note.textContent = state.manual._savedAt ? `Saved manual: ${state.manual._savedAt}` : "";
-
-  renderRatios();
+/* MANUAL COUNTS */
+function getManual(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEYS.manual) || "{}"); }
+  catch{ return {}; }
 }
 
-function renderRatios() {
-  const tbody = document.querySelector("#table_ratios tbody");
-  tbody.innerHTML = "";
+function setManual(obj){
+  localStorage.setItem(LS_KEYS.manual, JSON.stringify(obj));
+}
 
-  function ratio(a, b) {
-    const A = Number(state.manual[a] || 0);
-    const B = Number(state.manual[b] || 0);
-    if (!B) return 0;
-    return +(A / B).toFixed(2);
-  }
-
-  const rows = [
-    ["Good : Core Racks", ratio("Good Racks", "Core Racks")],
-    ["Good : Core Electric Racks", ratio("Good Electric Racks", "Core Electric Racks")],
-    ["Good : Used Axles", ratio("Good Axles", "Used Axles")],
-    ["Good : Used Drive Shafts", ratio("Good Drive Shafts", "Used Drive Shafts")],
-    ["Good : Used Gear boxes", ratio("Good Gear boxes", "Used Gear boxes")]
+function manualReadInputs(){
+  const ids = [
+    "m_good_racks","m_core_racks","m_good_eracks","m_core_eracks",
+    "m_good_axles","m_used_axles","m_good_ds","m_used_ds",
+    "m_good_gb","m_used_gb",
   ];
-
-  rows.forEach(([name, val]) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${name}</td><td>${val}</td>`;
-    tbody.appendChild(tr);
-  });
-}
-
-/* ---------- Carrier Log ---------- */
-function renderCarrierLog() {
-  const tbody = document.querySelector("#table_carriers tbody");
-  tbody.innerHTML = "";
-
-  state.carrierLog.forEach((row, idx) => {
-    const status = row.completedAt ? "Completed" : "Open";
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${row.carrier}</td>
-      <td>${fmtInt(row.qty)}</td>
-      <td>${row.receivedDate || ""}</td>
-      <td>${status}</td>
-      <td>${row.completedAt ? new Date(row.completedAt).toLocaleString() : ""}</td>
-      <td>
-        <button class="btn small" data-action="complete" data-idx="${idx}">
-          ${row.completedAt ? "Completed ✓" : "Complete"}
-        </button>
-        <button class="btn small danger" data-action="delete" data-idx="${idx}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  const totals = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-  state.carrierLog.forEach(r => {
-    const c = r.carrier || "Other";
-    totals[c] = (totals[c] || 0) + (Number(r.qty) || 0);
-  });
-
-  makeChart(
-    "chart_carrier_log",
-    "bar",
-    ["FedEx", "UPS", "USPS", "Other"],
-    [totals.FedEx, totals.UPS, totals.USPS, totals.Other],
-    "Received Qty"
-  );
-}
-
-/* ---------- Loose Parts ---------- */
-function renderLooseParts() {
-  const tbody = document.querySelector("#table_loose tbody");
-  tbody.innerHTML = "";
-
-  const totals = {};
-  state.looseParts.forEach(r => {
-    totals[r.condition] = (totals[r.condition] || 0) + 1;
-  });
-
-  // newest first
-  const sorted = [...state.looseParts].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  sorted.forEach(row => {
-    const idx = state.looseParts.findIndex(x => x.id === row.id);
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${row.date || ""}</td>
-      <td>${row.part || ""}</td>
-      <td>${row.condition || ""}</td>
-      <td><button class="btn small danger" data-loose-del="${idx}">Delete</button></td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  const totalsBody = document.querySelector("#table_loose_totals tbody");
-  totalsBody.innerHTML = "";
-  Object.keys(totals).sort().forEach(k => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${k}</td><td>${fmtInt(totals[k])}</td>`;
-    totalsBody.appendChild(tr);
-  });
-}
-
-/* ---------- Logs (Snapshots stored on-site) ---------- */
-function buildSnapshot(reason = "Manual Save") {
-  if (!state.computed) return null;
-
-  // Carrier log totals
-  const carrierLogTotals = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-  let carrierCompleted = 0;
-  state.carrierLog.forEach(r => {
-    carrierLogTotals[r.carrier] = (carrierLogTotals[r.carrier] || 0) + (Number(r.qty) || 0);
-    if (r.completedAt) carrierCompleted += 1;
-  });
-
-  // Loose totals
-  const looseTotals = {};
-  state.looseParts.forEach(r => {
-    looseTotals[r.condition] = (looseTotals[r.condition] || 0) + 1;
-  });
-
-  // Manual totals
-  const manualCounts = {};
-  MANUAL_FIELDS.forEach(k => manualCounts[k] = Number(state.manual[k] || 0));
-
-  const snap = {
-    id: crypto.randomUUID(),
-    date: dateStampLocal(),
-    createdAt: nowISO(),
-    reason,
-    summary: {
-      trackingScans: { ...state.computed.carrierScanCounts },
-      totalScans: state.computed.totalScans,
-      uniqueTracking: state.computed.uniqueTrackingCount,
-      repeatedTracking: state.computed.repeatedTrackingCount,
-
-      totalParts: state.computed.totalParts,
-      returnConditionsParts: { ...state.computed.conditionParts },
-
-      manualCounts,
-      carrierLogTotals,
-      carrierLogEntries: state.carrierLog.length,
-      carrierLogCompleted: carrierCompleted,
-
-      looseTotals,
-      looseEntries: state.looseParts.length
-    }
-  };
-
-  return snap;
-}
-
-function renderLogs() {
-  logsListEl.innerHTML = "";
-  const sorted = [...state.logs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-
-  if (!sorted.length) {
-    logsListEl.innerHTML = `<div class="row"><span>No logs saved yet.</span></div>`;
-    logDetailsEl.textContent = "No log selected.";
-    return;
-  }
-
-  sorted.forEach(s => {
-    const div = document.createElement("div");
-    div.className = "row";
-    div.style.cursor = "pointer";
-    div.innerHTML = `
-      <span>${s.date} • ${new Date(s.createdAt).toLocaleString()}</span>
-      <span>Total Parts: ${fmtInt(s.summary?.totalParts || 0)}</span>
-    `;
-    div.addEventListener("click", () => {
-      logDetailsEl.textContent = JSON.stringify(s, null, 2);
-    });
-    logsListEl.appendChild(div);
-  });
-
-  // default show latest
-  logDetailsEl.textContent = JSON.stringify(sorted[0], null, 2);
-}
-
-/* ---------- Export (PDF/Excel only — logs NOT included) ---------- */
-function summaryText(snapshot) {
-  const s = snapshot.summary;
-  const lines = [];
-  lines.push(`RRPD Summary`);
-  lines.push(`Date: ${snapshot.date}`);
-  lines.push(`Computed: ${new Date(snapshot.createdAt).toLocaleString()}`);
-  lines.push("");
-  lines.push(`Tracking (Total Scans)`);
-  lines.push(`FedEx: ${fmtInt(s.trackingScans.FedEx || 0)}`);
-  lines.push(`UPS: ${fmtInt(s.trackingScans.UPS || 0)}`);
-  lines.push(`USPS: ${fmtInt(s.trackingScans.USPS || 0)}`);
-  lines.push(`Other: ${fmtInt(s.trackingScans.Other || 0)}`);
-  lines.push(`Total Scans: ${fmtInt(s.totalScans || 0)}`);
-  lines.push(`Unique Tracking: ${fmtInt(s.uniqueTracking || 0)}`);
-  lines.push(`Repeated Tracking: ${fmtInt(s.repeatedTracking || 0)}`);
-  lines.push("");
-  lines.push(`Parts (excludes Return Label / Packing Slip)`);
-  lines.push(`Total Parts: ${fmtInt(s.totalParts || 0)}`);
-  lines.push("");
-  lines.push(`Return Conditions (Parts)`);
-  const condEntries = Object.entries(s.returnConditionsParts || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0));
-  condEntries.slice(0, 15).forEach(([k, v]) => lines.push(`${k}: ${fmtInt(v)}`));
-  lines.push("");
-  lines.push(`Manual Counts`);
-  MANUAL_FIELDS.forEach(k => lines.push(`${k}: ${fmtInt(s.manualCounts?.[k] || 0)}`));
-  lines.push("");
-  lines.push(`Carrier Log Totals (manual)`);
-  ["FedEx","UPS","USPS","Other"].forEach(k => lines.push(`${k}: ${fmtInt(s.carrierLogTotals?.[k] || 0)}`));
-  lines.push(`Carrier Log Entries: ${fmtInt(s.carrierLogEntries || 0)} (Completed: ${fmtInt(s.carrierLogCompleted || 0)})`);
-  lines.push("");
-  lines.push(`Loose Parts`);
-  lines.push(`Loose Entries: ${fmtInt(s.looseEntries || 0)}`);
-  Object.entries(s.looseTotals || {}).forEach(([k, v]) => lines.push(`${k}: ${fmtInt(v)}`));
-  return lines.join("\n");
-}
-
-function getLogoDataURL() {
-  const img = document.getElementById("da_logo");
-  if (!img) return null;
-  try {
-    const c = document.createElement("canvas");
-    c.width = img.naturalWidth || 128;
-    c.height = img.naturalHeight || 128;
-    c.getContext("2d").drawImage(img, 0, 0);
-    return c.toDataURL("image/png");
-  } catch { return null; }
-}
-
-function exportPDF(snapshot) {
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "pt", format: "letter" });
-
-  doc.setFillColor(4, 26, 51);
-  doc.rect(0, 0, 612, 90, "F");
-
-  const logo = getLogoDataURL();
-  if (logo) {
-    try { doc.addImage(logo, "PNG", 36, 18, 54, 54); } catch {}
-  }
-
-  doc.setTextColor(245, 248, 255);
-  doc.setFontSize(18);
-  doc.text(`RRPD Summary`, 110, 44);
-  doc.setFontSize(11);
-  doc.text(`Date: ${snapshot.date}`, 110, 64);
-  doc.text(`Computed: ${new Date(snapshot.createdAt).toLocaleString()}`, 110, 80);
-  doc.setTextColor(0, 0, 0);
-
-  const s = snapshot.summary;
-
-  doc.autoTable({
-    startY: 110,
-    head: [["Tracking (Total Scans)", "Value"]],
-    body: [
-      ["FedEx", s.trackingScans.FedEx || 0],
-      ["UPS", s.trackingScans.UPS || 0],
-      ["USPS", s.trackingScans.USPS || 0],
-      ["Other", s.trackingScans.Other || 0],
-      ["Total Scans", s.totalScans || 0],
-      ["Unique Tracking", s.uniqueTracking || 0],
-      ["Repeated Tracking", s.repeatedTracking || 0],
-    ],
-    styles: { fontSize: 10 },
-    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
-  });
-
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 14,
-    head: [["Parts", "Value"]],
-    body: [
-      ["Total Parts (excludes Return Label / Packing Slip)", s.totalParts || 0]
-    ],
-    styles: { fontSize: 10 },
-    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
-  });
-
-  const condEntries = Object.entries(s.returnConditionsParts || {})
-    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
-    .slice(0, 30)
-    .map(([k, v]) => [k, v]);
-
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 14,
-    head: [["Return Conditions (Parts)", "Parts"]],
-    body: condEntries,
-    styles: { fontSize: 10 },
-    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
-  });
-
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 14,
-    head: [["Manual Counts", "Value"]],
-    body: MANUAL_FIELDS.map(k => [k, Number(s.manualCounts?.[k] || 0)]),
-    styles: { fontSize: 10 },
-    headStyles: { fillColor: [0, 116, 217], textColor: [245, 248, 255] }
-  });
-
-  doc.save(`RRPD_Summary_${snapshot.date}.pdf`);
-}
-
-function exportExcel(snapshot) {
-  const wb = XLSX.utils.book_new();
-  const s = snapshot.summary;
-
-  const summaryRows = [
-    ["RRPD Summary", ""],
-    ["Date", snapshot.date],
-    ["Computed", new Date(snapshot.createdAt).toLocaleString()],
-    ["", ""],
-    ["Tracking (Total Scans)", "Value"],
-    ["FedEx", s.trackingScans.FedEx || 0],
-    ["UPS", s.trackingScans.UPS || 0],
-    ["USPS", s.trackingScans.USPS || 0],
-    ["Other", s.trackingScans.Other || 0],
-    ["Total Scans", s.totalScans || 0],
-    ["Unique Tracking", s.uniqueTracking || 0],
-    ["Repeated Tracking", s.repeatedTracking || 0],
-    ["", ""],
-    ["Parts", "Value"],
-    ["Total Parts (excludes Return Label / Packing Slip)", s.totalParts || 0],
-  ];
-  const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
-  ws1["!cols"] = [{ wch: 42 }, { wch: 34 }];
-  XLSX.utils.book_append_sheet(wb, ws1, "Summary");
-
-  const condRows = [["Condition", "Parts"]];
-  Object.entries(s.returnConditionsParts || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0))
-    .forEach(([k, v]) => condRows.push([k, v]));
-  const ws2 = XLSX.utils.aoa_to_sheet(condRows);
-  ws2["!cols"] = [{ wch: 32 }, { wch: 12 }];
-  XLSX.utils.book_append_sheet(wb, ws2, "Return Conditions");
-
-  const manualRows = [["Metric", "Value"]];
-  MANUAL_FIELDS.forEach(k => manualRows.push([k, Number(s.manualCounts?.[k] || 0)]));
-  const ws3 = XLSX.utils.aoa_to_sheet(manualRows);
-  ws3["!cols"] = [{ wch: 32 }, { wch: 12 }];
-  XLSX.utils.book_append_sheet(wb, ws3, "Manual Counts");
-
-  // Carriers log (manual)
-  const clRows = [["Carrier", "Qty", "Received Date", "Status", "Completed At"]];
-  state.carrierLog.forEach(r => {
-    clRows.push([
-      r.carrier,
-      Number(r.qty || 0),
-      r.receivedDate || "",
-      r.completedAt ? "Completed" : "Open",
-      r.completedAt ? new Date(r.completedAt).toLocaleString() : ""
-    ]);
-  });
-  const ws4 = XLSX.utils.aoa_to_sheet(clRows);
-  ws4["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 22 }];
-  XLSX.utils.book_append_sheet(wb, ws4, "Carriers");
-
-  // Loose parts
-  const lpRows = [["Date", "Part", "Condition"]];
-  state.looseParts.forEach(r => lpRows.push([r.date || "", r.part || "", r.condition || ""]));
-  const ws5 = XLSX.utils.aoa_to_sheet(lpRows);
-  ws5["!cols"] = [{ wch: 14 }, { wch: 26 }, { wch: 16 }];
-  XLSX.utils.book_append_sheet(wb, ws5, "Loose Parts");
-
-  XLSX.writeFile(wb, `RRPD_Summary_${snapshot.date}.xlsx`);
-}
-
-/* ---------- Export Modal ---------- */
-function openExportModal() {
-  const snap = buildSnapshot("Export");
-  if (!snap) return;
-
-  exportPreview.textContent = summaryText(snap);
-  exportConfirm.checked = false;
-  exportPDFBtn.disabled = true;
-  exportExcelBtn.disabled = true;
-
-  exportModal.classList.add("show");
-  exportModal.setAttribute("aria-hidden", "false");
-
-  exportConfirm.onchange = () => {
-    const ok = exportConfirm.checked;
-    exportPDFBtn.disabled = !ok;
-    exportExcelBtn.disabled = !ok;
-  };
-
-  exportPDFBtn.onclick = () => { exportPDF(snap); closeExportModal(); };
-  exportExcelBtn.onclick = () => { exportExcel(snap); closeExportModal(); };
-}
-function closeExportModal() {
-  exportModal.classList.remove("show");
-  exportModal.setAttribute("aria-hidden", "true");
-}
-
-/* ---------- CSV Parse ---------- */
-function parseCSVFile(file) {
-  return new Promise((resolve, reject) => {
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: results => resolve(results.data || []),
-      error: err => reject(err)
-    });
-  });
-}
-
-/* ---------- WH Upload ---------- */
-async function handleWhUpload(file) {
-  statusEl.textContent = "Loading WH CSV…";
-  try {
-    const rows = await parseCSVFile(file);
-    state.whRows = rows;
-    state.loadedAt = nowISO();
-
-    state.computed = computeFromWhRows(rows);
-
-    const ts = new Date();
-    statusEl.textContent = `WH CSV loaded • ${fmtInt(rows.length)} rows • ${ts.toLocaleString()}`;
-    updatedSmall.textContent = `Last loaded: ${ts.toLocaleString()}`;
-
-    exportBtn.disabled = false;
-    saveLogBtn.disabled = false;
-
-    renderDashboard(state.computed);
-    renderConditions(state.computed);
-
-    // Update manifest KPI baseline
-    kpiWhFedexUnique.textContent = fmtInt(state.computed.whFedexUnique.size);
-
-  } catch (e) {
-    console.error(e);
-    statusEl.textContent = "WH CSV load failed — check file format.";
-  }
-}
-
-/* ---------- Manifest Compare (CSV) ---------- */
-function extractTrackingCandidatesFromRow(rowObj) {
-  // Grab ALL cell values, try to find tracking-like strings
-  const vals = Object.values(rowObj || {});
-  const out = [];
-  for (const v of vals) {
-    const t = normalizeTracking(v);
-    if (!t) continue;
-
-    // Filter obvious non-tracking (too short)
-    if (t.length < 6) continue;
-
-    // Keep only FedEx according to your rule (96... or 797...)
-    if (classifyCarrier(t) === "FedEx") out.push(t);
+  const out = {};
+  for (const id of ids){
+    out[id] = parseInt($(id).value || "0", 10) || 0;
   }
   return out;
 }
 
-async function runManifestCompare() {
-  if (!state.computed) {
-    alert("Upload WH CSV first.");
+function manualWriteInputs(m){
+  const ids = Object.keys(m);
+  for (const id of ids){
+    if ($(id)) $(id).value = m[id];
+  }
+}
+
+function computeRatios(m){
+  const ratio = (a,b) => b>0 ? (a/b) : null;
+
+  const rows = [
+    { label:"Good : Core Racks", val: ratio(m.m_good_racks, m.m_core_racks) },
+    { label:"Good : Core Electric Racks", val: ratio(m.m_good_eracks, m.m_core_eracks) },
+    { label:"Good : Used Axles", val: ratio(m.m_good_axles, m.m_used_axles) },
+    { label:"Good : Used Drive Shafts", val: ratio(m.m_good_ds, m.m_used_ds) },
+    { label:"Good : Used Gear boxes", val: ratio(m.m_good_gb, m.m_used_gb) },
+  ];
+
+  return rows.map(r=>({
+    label:r.label,
+    value: r.val === null ? "—" : r.val.toFixed(2)
+  }));
+}
+
+function renderManual(){
+  const m = getManual();
+  manualWriteInputs(m);
+
+  const totals = {
+    racks: (m.m_good_racks||0)+(m.m_core_racks||0)+(m.m_good_eracks||0)+(m.m_core_eracks||0),
+    axles: (m.m_good_axles||0)+(m.m_used_axles||0),
+    ds: (m.m_good_ds||0)+(m.m_used_ds||0),
+    gb: (m.m_good_gb||0)+(m.m_used_gb||0),
+  };
+  $("manualTotalRacks").textContent = fmtInt(totals.racks);
+  $("manualTotalAxles").textContent = fmtInt(totals.axles);
+  $("manualTotalDS").textContent = fmtInt(totals.ds);
+  $("manualTotalGB").textContent = fmtInt(totals.gb);
+
+  const ratioRows = computeRatios(m);
+  const tb = $("ratioTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const r of ratioRows){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.label}</td><td><b>${r.value}</b></td>`;
+    tb.appendChild(tr);
+  }
+}
+
+$("saveManualBtn").addEventListener("click", ()=>{
+  const m = manualReadInputs();
+  setManual(m);
+  $("manualSavedMsg").textContent = `Saved manual: ${new Date().toLocaleString()}`;
+  renderManual();
+});
+
+/* CARRIER LOG (manual) */
+function getCarrierLog(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEYS.carriers) || "[]"); }
+  catch{ return []; }
+}
+function setCarrierLog(arr){
+  localStorage.setItem(LS_KEYS.carriers, JSON.stringify(arr));
+}
+
+function renderCarrierLog(){
+  const arr = getCarrierLog();
+  const tb = $("carrierLogTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const item of arr){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${item.date || ""}</td>
+      <td>${item.carrier}</td>
+      <td><b>${fmtInt(item.qty)}</b></td>
+      <td>${item.completed ? "Completed" : "Open"}</td>
+      <td>
+        <button class="btn secondary" data-act="toggle" data-id="${item.id}">${item.completed ? "Reopen" : "Complete"}</button>
+        <button class="btn secondary" data-act="del" data-id="${item.id}">Delete</button>
+      </td>
+    `;
+    tb.appendChild(tr);
+  }
+
+  tb.querySelectorAll("button").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      let arr = getCarrierLog();
+      if (act === "del"){
+        arr = arr.filter(x=>x.id !== id);
+      } else if (act === "toggle"){
+        arr = arr.map(x=> x.id===id ? {...x, completed: !x.completed} : x);
+      }
+      setCarrierLog(arr);
+      renderCarrierLog();
+    });
+  });
+}
+
+$("addCarrierLogBtn").addEventListener("click", ()=>{
+  const carrier = $("carrierLogCarrier").value;
+  const qty = parseInt($("carrierLogQty").value || "0",10) || 0;
+  const date = $("carrierLogDate").value || new Date().toISOString().slice(0,10);
+
+  const arr = getCarrierLog();
+  arr.unshift({
+    id: crypto.randomUUID(),
+    carrier, qty, date,
+    completed: false,
+    createdAt: nowIso()
+  });
+  setCarrierLog(arr);
+  renderCarrierLog();
+  $("carrierLogQty").value = "";
+});
+
+/* LOOSE PARTS */
+function getLoose(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEYS.loose) || "[]"); }
+  catch{ return []; }
+}
+function setLoose(arr){
+  localStorage.setItem(LS_KEYS.loose, JSON.stringify(arr));
+}
+function renderLoose(){
+  const arr = getLoose();
+  const tb = $("looseTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const item of arr){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${item.date}</td>
+      <td style="font-family:ui-monospace,monospace">${item.partNumber}</td>
+      <td>${item.condition}</td>
+      <td><button class="btn secondary" data-id="${item.id}">Delete</button></td>
+    `;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll("button").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const id = b.dataset.id;
+      const next = getLoose().filter(x=>x.id!==id);
+      setLoose(next);
+      renderLoose();
+    });
+  });
+
+  // totals table
+  const totals = new Map();
+  for (const item of arr){
+    totals.set(item.condition, (totals.get(item.condition)||0) + 1);
+  }
+  const tbt = $("looseTotalsTable").querySelector("tbody");
+  tbt.innerHTML = "";
+  for (const [k,v] of Array.from(totals.entries()).sort((a,b)=>b[1]-a[1])){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${k}</td><td><b>${fmtInt(v)}</b></td>`;
+    tbt.appendChild(tr);
+  }
+}
+
+$("addLooseBtn").addEventListener("click", ()=>{
+  const pn = safeStr($("loosePartPn").value);
+  if (!pn) return;
+
+  const condition = $("loosePartCond").value;
+  const date = $("loosePartDate").value || new Date().toISOString().slice(0,10);
+
+  const arr = getLoose();
+  arr.unshift({ id: crypto.randomUUID(), partNumber: pn, condition, date, createdAt: nowIso() });
+  setLoose(arr);
+  renderLoose();
+  $("loosePartPn").value = "";
+});
+
+/* MANIFEST */
+function isFedexId(t){
+  const s = safeStr(t).replace(/\s+/g,"");
+  return looksLikeFedex(s);
+}
+
+function extractManifestFedex(manRows){
+  if (!manRows.length) return [];
+
+  // find a likely "tracking" column
+  const keys = Object.keys(manRows[0]);
+  const norm = keys.map(k=>({raw:k, n: normalizeHeader(k)}));
+  const trackingKey = (norm.find(x=>x.n.includes("tracking")) || norm[0]).raw;
+
+  const ids = [];
+  for (const r of manRows){
+    const v = sciToIntString(safeStr(r[trackingKey]));
+    if (isFedexId(v)) ids.push(v);
+  }
+  return Array.from(new Set(ids));
+}
+
+function extractWhFedexTrackingFromWhModel(model){
+  const ids = model.rows
+    .filter(r=>r.isTrackingRow && r.tracking && classifyCarrier(r.tracking)==="FedEx")
+    .map(r=>r.tracking);
+  return Array.from(new Set(ids));
+}
+
+function renderManifestComparison(){
+  if (!whRows.length){
+    $("kpiManifestFedex").textContent = "0";
+    $("kpiWhFedex").textContent = "0";
+    $("missingInWh").innerHTML = "";
+    $("missingInManifest").innerHTML = "";
     return;
   }
-  const file = manifestCsvInput.files?.[0];
-  if (!file) {
-    alert("Upload a FedEx Manifest CSV.");
-    return;
+
+  const whModel = buildModel(whRows);
+  const whFedex = extractWhFedexTrackingFromWhModel(whModel);
+
+  const manFedex = extractManifestFedex(manifestRows);
+
+  $("kpiManifestFedex").textContent = fmtInt(manFedex.length);
+  $("kpiWhFedex").textContent = fmtInt(whFedex.length);
+
+  const setWh = new Set(whFedex);
+  const setMan = new Set(manFedex);
+
+  const missingInWh = manFedex.filter(x=>!setWh.has(x)).slice(0,500);
+  const missingInMan = whFedex.filter(x=>!setMan.has(x)).slice(0,500);
+
+  const a = $("missingInWh");
+  a.innerHTML = "";
+  missingInWh.forEach(id=>{
+    const div=document.createElement("div");
+    div.className="item";
+    div.innerHTML = `<span>${id}</span>`;
+    a.appendChild(div);
+  });
+
+  const b = $("missingInManifest");
+  b.innerHTML = "";
+  missingInMan.forEach(id=>{
+    const div=document.createElement("div");
+    div.className="item";
+    div.innerHTML = `<span>${id}</span>`;
+    b.appendChild(div);
+  });
+}
+
+$("manifestCsvInput").addEventListener("change", async (e)=>{
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  Papa.parse(file, {
+    header:true,
+    skipEmptyLines:true,
+    complete: (res)=>{
+      manifestRows = res.data || [];
+      renderManifestComparison();
+    }
+  });
+});
+
+$("clearManifestBtn").addEventListener("click", ()=>{
+  manifestRows = [];
+  $("manifestCsvInput").value = "";
+  renderManifestComparison();
+});
+
+/* LOGS */
+function getLogs(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEYS.logs) || "[]"); }
+  catch{ return []; }
+}
+function setLogs(arr){
+  localStorage.setItem(LS_KEYS.logs, JSON.stringify(arr));
+}
+
+function buildSnapshot(){
+  const model = buildModel(whRows);
+  const agg = aggregate(model);
+  const manual = getManual();
+  const carrierLog = getCarrierLog();
+  const loose = getLoose();
+
+  // Work date: if user wants, you can set it from CSV column later.
+  // For now: default to today's date, but they can still save older days by changing system date OR you can add a date picker later.
+  const workDate = new Date().toISOString().slice(0,10);
+
+  return {
+    id: crypto.randomUUID(),
+    workDate,
+    savedAt: nowIso(),
+    whMeta,
+    totals: {
+      carrierScans: agg.carrierCounts,
+      totalScans: agg.totalScans,
+      uniqueTracking: agg.uniqueTrackingCount,
+      totalParts: agg.totalParts,
+      boxesWithMultipleParts: agg.boxesWithMultipleParts,
+    },
+    topBoxes: agg.topBoxes.slice(0,10),
+    returnConditions: Object.fromEntries(agg.condTotals),
+    manual,
+    carrierLogCount: carrierLog.length,
+    looseCount: loose.length,
+  };
+}
+
+function renderLogs(){
+  const logs = getLogs();
+  const tb = $("logsTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const l of logs){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${l.workDate}</td>
+      <td>${new Date(l.savedAt).toLocaleString()}</td>
+      <td><b>${fmtInt(l.totals.totalScans)}</b></td>
+      <td><b>${fmtInt(l.totals.totalParts)}</b></td>
+      <td>
+        <button class="btn secondary" data-act="view" data-id="${l.id}">View</button>
+        <button class="btn secondary" data-act="del" data-id="${l.id}">Delete</button>
+      </td>
+    `;
+    tb.appendChild(tr);
   }
 
-  manifestMissingList.innerHTML = "";
-  manifestExtraList.innerHTML = "";
+  tb.querySelectorAll("button").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      let logs = getLogs();
 
-  try {
-    const manifestRows = await parseCSVFile(file);
+      if (act === "del"){
+        logs = logs.filter(x=>x.id!==id);
+        setLogs(logs);
+        $("logDetails").textContent = "";
+        $("logDetailsHint").textContent = "Select a log to preview.";
+        renderLogs();
+        return;
+      }
 
-    const manifestFedexSet = new Set();
-    for (const r of manifestRows) {
-      extractTrackingCandidatesFromRow(r).forEach(t => manifestFedexSet.add(t));
-    }
+      const found = logs.find(x=>x.id===id);
+      if (found){
+        $("logDetailsHint").textContent = `Log ${found.workDate}`;
+        $("logDetails").textContent = JSON.stringify(found, null, 2);
+      }
+    });
+  });
+}
 
-    const whFedexSet = state.computed.whFedexUnique;
+/* EXPORT (PDF + XLSX) */
+function buildExportText(snapshot){
+  const lines = [];
+  lines.push(`RRPD Summary`);
+  lines.push(`Date: ${snapshot.workDate}`);
+  lines.push(`Computed: ${new Date(snapshot.savedAt).toLocaleString()}`);
+  lines.push(``);
+  lines.push(`Tracking Summary (Total Scans)`);
+  lines.push(`FedEx: ${snapshot.totals.carrierScans.FedEx}`);
+  lines.push(`UPS: ${snapshot.totals.carrierScans.UPS}`);
+  lines.push(`USPS: ${snapshot.totals.carrierScans.USPS}`);
+  lines.push(`Other: ${snapshot.totals.carrierScans.Other}`);
+  lines.push(`Total Scans: ${snapshot.totals.totalScans}`);
+  lines.push(`Unique Tracking: ${snapshot.totals.uniqueTracking}`);
+  lines.push(`Total Parts (Pieces): ${snapshot.totals.totalParts}`);
+  lines.push(`Boxes With Multiple Parts: ${snapshot.totals.boxesWithMultipleParts}`);
+  lines.push(``);
+  lines.push(`Top Boxes (by pieces)`);
+  snapshot.topBoxes.forEach(b=>{
+    lines.push(`${b.tracking} — ${b.pieces} pcs (${b.carrier})`);
+  });
+  lines.push(``);
+  lines.push(`Return Conditions (pieces)`);
+  const cond = Object.entries(snapshot.returnConditions).sort((a,b)=>b[1]-a[1]);
+  cond.slice(0,10).forEach(([k,v])=>lines.push(`${k}: ${v}`));
+  lines.push(``);
+  lines.push(`Manual Counts saved: ${snapshot.manual ? "Yes" : "No"}`);
+  lines.push(`Carrier log entries: ${snapshot.carrierLogCount}`);
+  lines.push(`Loose parts entries: ${snapshot.looseCount}`);
+  return lines.join("\n");
+}
 
-    const missing = [];
-    for (const t of manifestFedexSet.values()) {
-      if (!whFedexSet.has(t)) missing.push(t);
-    }
+async function exportPdf(snapshot){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"pt", format:"letter" });
 
-    const extra = [];
-    for (const t of whFedexSet.values()) {
-      if (!manifestFedexSet.has(t)) extra.push(t);
-    }
+  // dark header
+  doc.setFillColor(11, 42, 102);
+  doc.rect(0,0,612,70,"F");
 
-    missing.sort();
-    extra.sort();
+  // logo
+  try{
+    const img = await fetch("logo.png");
+    const blob = await img.blob();
+    const dataUrl = await blobToDataUrl(blob);
+    doc.addImage(dataUrl, "PNG", 18, 14, 42, 42);
+  }catch{}
 
-    // KPIs
-    kpiManifestTotal.textContent = fmtInt(manifestFedexSet.size);
-    kpiWhFedexUnique.textContent = fmtInt(whFedexSet.size);
-    kpiMissingInWh.textContent = fmtInt(missing.length);
-    kpiExtraInWh.textContent = fmtInt(extra.length);
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(16);
+  doc.text(`RRPD Summary — ${snapshot.workDate}`, 70, 36);
+  doc.setFontSize(10);
+  doc.text(`Computed: ${new Date(snapshot.savedAt).toLocaleString()}`, 70, 54);
 
-    // Render lists
-    manifestMissingList.innerHTML = missing.length
-      ? missing.map(t => `<div class="row"><span>${t}</span></div>`).join("")
-      : `<div class="row"><span>None</span></div>`;
+  doc.setTextColor(20,20,20);
+  doc.setFontSize(12);
 
-    manifestExtraList.innerHTML = extra.length
-      ? extra.map(t => `<div class="row"><span>${t}</span></div>`).join("")
-      : `<div class="row"><span>None</span></div>`;
+  // Tables
+  const topY = 90;
 
-  } catch (e) {
-    console.error(e);
-    alert("Manifest CSV failed to parse.");
+  doc.autoTable({
+    startY: topY,
+    head: [["Carrier", "Scans"]],
+    body: [
+      ["FedEx", snapshot.totals.carrierScans.FedEx],
+      ["UPS", snapshot.totals.carrierScans.UPS],
+      ["USPS", snapshot.totals.carrierScans.USPS],
+      ["Other", snapshot.totals.carrierScans.Other],
+      ["Total Scans", snapshot.totals.totalScans],
+      ["Unique Tracking", snapshot.totals.uniqueTracking],
+      ["Total Parts (Pieces)", snapshot.totals.totalParts],
+    ],
+    theme:"grid",
+    styles:{ fillColor:[245,245,245] },
+    headStyles:{ fillColor:[11,42,102], textColor:255 }
+  });
+
+  const y2 = doc.lastAutoTable.finalY + 14;
+
+  doc.autoTable({
+    startY: y2,
+    head: [["Top Boxes (Tracking)", "Pieces", "Carrier"]],
+    body: snapshot.topBoxes.map(b=>[b.tracking, b.pieces, b.carrier]),
+    theme:"grid",
+    styles:{ fillColor:[245,245,245] },
+    headStyles:{ fillColor:[11,42,102], textColor:255 }
+  });
+
+  const y3 = doc.lastAutoTable.finalY + 14;
+
+  const condRows = Object.entries(snapshot.returnConditions)
+    .sort((a,b)=>b[1]-a[1])
+    .slice(0,20)
+    .map(([k,v])=>[k, v]);
+
+  doc.autoTable({
+    startY: y3,
+    head: [["Return Conditions", "Pieces"]],
+    body: condRows,
+    theme:"grid",
+    styles:{ fillColor:[245,245,245] },
+    headStyles:{ fillColor:[11,42,102], textColor:255 }
+  });
+
+  doc.save(`RRPD_Summary_${snapshot.workDate}.pdf`);
+}
+
+async function blobToDataUrl(blob){
+  return new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onload = ()=>resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+async function exportXlsx(snapshot){
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(`RRPD ${snapshot.workDate}`);
+
+  ws.properties.defaultRowHeight = 18;
+
+  // Columns
+  ws.columns = [
+    { header: "Section", key:"section", width: 24 },
+    { header: "Metric", key:"metric", width: 34 },
+    { header: "Value", key:"value", width: 18 },
+  ];
+
+  // Dark header row
+  ws.getRow(1).font = { bold:true, color:{argb:"FFFFFFFF"} };
+  ws.getRow(1).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0B2A66"} };
+  ws.getRow(1).alignment = { vertical:"middle" };
+
+  // Add logo (ExcelJS supports images)
+  try{
+    const res = await fetch("logo.png");
+    const buf = await res.arrayBuffer();
+    const imageId = wb.addImage({ buffer: buf, extension: "png" });
+    ws.addImage(imageId, { tl:{ col:0, row:0 }, ext:{ width:70, height:70 } });
+  }catch{}
+
+  // Title block
+  ws.mergeCells("B2:C2");
+  ws.getCell("B2").value = `RRPD Summary — ${snapshot.workDate}`;
+  ws.getCell("B2").font = { size:16, bold:true, color:{ argb:"FF0B2A66" } };
+
+  ws.mergeCells("B3:C3");
+  ws.getCell("B3").value = `Computed: ${new Date(snapshot.savedAt).toLocaleString()}`;
+  ws.getCell("B3").font = { size:11, italic:true, color:{ argb:"FF1F3A5A" } };
+
+  let r = 5;
+
+  function section(title){
+    ws.getCell(`A${r}`).value = title;
+    ws.getCell(`A${r}`).font = { bold:true, color:{argb:"FFFFFFFF"} };
+    ws.getCell(`A${r}`).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0B2A66"} };
+    ws.mergeCells(`A${r}:C${r}`);
+    r++;
   }
-}
+  function row(metric, value){
+    ws.getCell(`A${r}`).value = "";
+    ws.getCell(`B${r}`).value = metric;
+    ws.getCell(`C${r}`).value = value;
+    r++;
+  }
 
-function clearManifestUI() {
-  manifestCsvInput.value = "";
-  kpiManifestTotal.textContent = "0";
-  kpiMissingInWh.textContent = "0";
-  kpiExtraInWh.textContent = "0";
-  manifestMissingList.innerHTML = "";
-  manifestExtraList.innerHTML = "";
-}
+  section("Tracking Summary (Total Scans)");
+  row("FedEx", snapshot.totals.carrierScans.FedEx);
+  row("UPS", snapshot.totals.carrierScans.UPS);
+  row("USPS", snapshot.totals.carrierScans.USPS);
+  row("Other", snapshot.totals.carrierScans.Other);
+  row("Total Scans", snapshot.totals.totalScans);
+  row("Unique Tracking", snapshot.totals.uniqueTracking);
+  row("Total Parts (Pieces)", snapshot.totals.totalParts);
+  row("Boxes With Multiple Parts", snapshot.totals.boxesWithMultipleParts);
 
-/* ---------- Wire UI ---------- */
-function wireUpload() {
-  whUploadBtn.addEventListener("click", () => whCsvInput.click());
-  whCsvInput.addEventListener("change", e => {
-    const file = e.target.files?.[0];
-    if (file) handleWhUpload(file);
+  r++;
+
+  section("Top Boxes (by pieces)");
+  ws.getCell(`A${r}`).value = "Tracking";
+  ws.getCell(`B${r}`).value = "Pieces";
+  ws.getCell(`C${r}`).value = "Carrier";
+  ["A","B","C"].forEach(c=>{
+    ws.getCell(`${c}${r}`).font = { bold:true, color:{argb:"FFFFFFFF"} };
+    ws.getCell(`${c}${r}`).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF173B78"} };
   });
-}
+  r++;
 
-function wireExport() {
-  exportBtn.addEventListener("click", openExportModal);
-  exportClose.addEventListener("click", closeExportModal);
-  exportModal.addEventListener("click", e => {
-    if (e.target === exportModal) closeExportModal();
-  });
-}
-
-function wireSaveLogs() {
-  saveLogBtn.addEventListener("click", () => {
-    const snap = buildSnapshot("Save to Logs");
-    if (!snap) return;
-    state.logs.push(snap);
-    saveLocal();
-    renderLogs();
-    alert("Saved to Logs.");
+  snapshot.topBoxes.forEach(b=>{
+    ws.getCell(`A${r}`).value = b.tracking;
+    ws.getCell(`B${r}`).value = b.pieces;
+    ws.getCell(`C${r}`).value = b.carrier;
+    r++;
   });
 
-  logsClearBtn.addEventListener("click", () => {
-    if (!confirm("Clear logs on this browser?")) return;
-    state.logs = [];
-    saveLocal();
-    renderLogs();
-  });
-}
+  r++;
 
-function wireManualButtons() {
-  document.getElementById("manual_save").addEventListener("click", () => {
-    document.querySelectorAll("[data-manual-key]").forEach(inp => {
-      const key = inp.getAttribute("data-manual-key");
-      state.manual[key] = Number(inp.value || 0);
+  section("Return Conditions (pieces)");
+  const cond = Object.entries(snapshot.returnConditions).sort((a,b)=>b[1]-a[1]).slice(0,25);
+  cond.forEach(([k,v])=>row(k, v));
+
+  // make it look less plain
+  ws.eachRow((row, rowNumber)=>{
+    row.eachCell((cell)=>{
+      cell.border = {
+        top:{style:"thin", color:{argb:"FFB0B8C1"}},
+        left:{style:"thin", color:{argb:"FFB0B8C1"}},
+        bottom:{style:"thin", color:{argb:"FFB0B8C1"}},
+        right:{style:"thin", color:{argb:"FFB0B8C1"}},
+      };
+      cell.alignment = { vertical:"middle" };
     });
-    state.manual._savedAt = new Date().toLocaleString();
-    saveLocal();
-    renderManual();
   });
 
-  document.getElementById("manual_clear").addEventListener("click", () => {
-    if (!confirm("Clear manual counts on this browser?")) return;
-    state.manual = {};
-    saveLocal();
-    renderManual();
-  });
+  const buf = await wb.xlsx.writeBuffer();
+  saveAs(new Blob([buf], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    `RRPD_Summary_${snapshot.workDate}.xlsx`
+  );
 }
 
-function wireCarrierLog() {
-  const add = document.getElementById("carrier_add");
-  const clear = document.getElementById("carrier_clear");
+/* EXPORT MODAL WIRING */
+function openExportModal(snapshot){
+  $("exportPreview").textContent = buildExportText(snapshot);
+  $("confirmExportChk").checked = false;
+  $("exportPdfBtn").disabled = true;
+  $("exportXlsxBtn").disabled = true;
+  $("exportModal").classList.remove("hidden");
 
-  add.addEventListener("click", () => {
-    const carrier = document.getElementById("carrier_name").value.trim();
-    const qty = Number(document.getElementById("carrier_qty").value || 0);
-    const receivedDate = document.getElementById("carrier_received").value || "";
+  $("confirmExportChk").onchange = (e)=>{
+    const ok = e.target.checked;
+    $("exportPdfBtn").disabled = !ok;
+    $("exportXlsxBtn").disabled = !ok;
+  };
 
-    if (!carrier || qty <= 0 || !receivedDate) return;
+  $("cancelExportBtn").onclick = ()=> $("exportModal").classList.add("hidden");
+  $("exportPdfBtn").onclick = async ()=>{
+    $("exportModal").classList.add("hidden");
+    await exportPdf(snapshot);
+  };
+  $("exportXlsxBtn").onclick = async ()=>{
+    $("exportModal").classList.add("hidden");
+    await exportXlsx(snapshot);
+  };
+}
 
-    state.carrierLog.push({
-      id: crypto.randomUUID(),
-      carrier,
-      qty,
-      receivedDate,
-      createdAt: nowISO(),
-      completedAt: null
-    });
+/* TABS */
+$("tabs").addEventListener("click", (e)=>{
+  const btn = e.target.closest(".tab");
+  if (!btn) return;
 
-    saveLocal();
-    renderCarrierLog();
-    document.getElementById("carrier_qty").value = "";
-  });
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  btn.classList.add("active");
 
-  clear.addEventListener("click", () => {
-    if (!confirm("Clear carrier log on this browser?")) return;
-    state.carrierLog = [];
-    saveLocal();
-    renderCarrierLog();
-  });
+  const tab = btn.dataset.tab;
 
-  document.querySelector("#table_carriers tbody").addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  const panel = document.querySelector(`#panel-${tab}`);
+  if (panel) panel.classList.add("active");
+});
 
-    const idx = Number(btn.dataset.idx);
-    const action = btn.dataset.action;
-    if (Number.isNaN(idx) || !state.carrierLog[idx]) return;
+/* LOAD CSV */
+$("whCsvInput").addEventListener("change", (e)=>{
+  const file = e.target.files?.[0];
+  if (!file) return;
 
-    if (action === "delete") {
-      state.carrierLog.splice(idx, 1);
-      saveLocal();
-      renderCarrierLog();
-      return;
+  Papa.parse(file, {
+    header:true,
+    skipEmptyLines:true,
+    complete: (res)=>{
+      whRows = res.data || [];
+      whMeta = { loadedAt: nowIso(), filename: file.name };
+
+      const model = buildModel(whRows);
+      const agg = aggregate(model);
+
+      $("loadStatus").textContent = `WH CSV loaded • ${whRows.length} rows • ${new Date().toLocaleString()}`;
+      $("exportBtn").disabled = false;
+      $("saveToLogsBtn").disabled = false;
+
+      renderDashboard(agg);
+      renderReturns(agg);
+      renderManifestComparison();
     }
-
-    if (action === "complete") {
-      const row = state.carrierLog[idx];
-      row.completedAt = row.completedAt ? null : nowISO();
-      saveLocal();
-      renderCarrierLog();
-    }
   });
-}
+});
 
-function wireLooseParts() {
-  const add = document.getElementById("loose_add");
-  const clear = document.getElementById("loose_clear");
+/* SAVE TO LOGS */
+$("saveToLogsBtn").addEventListener("click", ()=>{
+  if (!whRows.length) return;
 
-  add.addEventListener("click", () => {
-    const part = document.getElementById("loose_part").value.trim();
-    const condition = document.getElementById("loose_condition").value.trim();
-    const date = document.getElementById("loose_date").value || "";
+  const snap = buildSnapshot();
+  const logs = getLogs();
+  logs.unshift(snap);
+  setLogs(logs);
+  renderLogs();
+});
 
-    if (!part || !condition || !date) return;
+/* EXPORT BUTTON */
+$("exportBtn").addEventListener("click", ()=>{
+  if (!whRows.length) return;
+  const snap = buildSnapshot();
+  openExportModal(snap);
+});
 
-    state.looseParts.push({
-      id: crypto.randomUUID(),
-      part,
-      condition,
-      date,
-      createdAt: nowISO()
-    });
+/* INIT */
+(function init(){
+  // set default dates to today
+  const today = new Date().toISOString().slice(0,10);
+  $("carrierLogDate").value = today;
+  $("loosePartDate").value = today;
 
-    saveLocal();
-    renderLooseParts();
-    document.getElementById("loose_part").value = "";
-  });
-
-  clear.addEventListener("click", () => {
-    if (!confirm("Clear loose parts on this browser?")) return;
-    state.looseParts = [];
-    saveLocal();
-    renderLooseParts();
-  });
-
-  document.querySelector("#table_loose tbody").addEventListener("click", e => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
-    const idx = Number(btn.dataset.looseDel);
-    if (Number.isNaN(idx) || !state.looseParts[idx]) return;
-    state.looseParts.splice(idx, 1);
-    saveLocal();
-    renderLooseParts();
-  });
-}
-
-function wireManifest() {
-  manifestRunBtn.addEventListener("click", runManifestCompare);
-  manifestClearBtn.addEventListener("click", clearManifestUI);
-}
-
-/* ---------- Init ---------- */
-function init() {
-  wireTabs();
-  loadLocal();
-
-  // Render local pages
   renderManual();
   renderCarrierLog();
-  renderLooseParts();
+  renderLoose();
   renderLogs();
-
-  // Wire actions
-  wireUpload();
-  wireExport();
-  wireSaveLogs();
-  wireManualButtons();
-  wireCarrierLog();
-  wireLooseParts();
-  wireManifest();
-
-  // Disable actions until WH loaded
-  exportBtn.disabled = true;
-  saveLogBtn.disabled = true;
-
-  // If logs exist, show latest
-  if (state.logs.length) {
-    logDetailsEl.textContent = JSON.stringify(
-      [...state.logs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0],
-      null, 2
-    );
-  } else {
-    logDetailsEl.textContent = "No log selected.";
-  }
-}
-
-document.addEventListener("DOMContentLoaded", init);
+  renderManifestComparison();
+})();
