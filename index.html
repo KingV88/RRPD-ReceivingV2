@@ -1,63 +1,300 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RRPD Receiving Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
+  <!-- IMPORTANT: file is style.css (NOT styles.css) to avoid 404 -->
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Libraries -->
+  <!-- CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+
+  <!-- Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- PDF export -->
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- Excel export -->
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 </head>
 
 <body>
-  <header>
-    <img src="detroit-axle-logo.png" alt="Detroit Axle" />
-    <h1>RRPD Receiving Dashboard</h1>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo" src="detroit-axle-logo.png" alt="Detroit Axle logo" />
+      <div>
+        <div class="title">RRPD Receiving Dashboard</div>
+        <div class="subtitle">WH Returns + Manifest + Loose Parts + Logs</div>
+      </div>
+    </div>
 
-    <div class="actions">
-      <input type="file" id="csvInput" accept=".csv" />
-      <button onclick="saveLogs()">Save to Logs</button>
-      <button onclick="openExport()">Export RRPD Summary</button>
+    <div class="top-actions">
+      <label class="file-btn">
+        <input id="whCsvInput" type="file" accept=".csv,text/csv" />
+        Upload WH CSV
+      </label>
+
+      <button id="saveLogsBtn" class="btn">Save to Logs</button>
+      <button id="exportSummaryBtn" class="btn primary">Export RRPD Summary</button>
     </div>
   </header>
 
-  <nav>
-    <button onclick="showTab('dashboard')">Dashboard</button>
-    <button onclick="showTab('carriers')">Carriers</button>
-    <button onclick="showTab('returns')">Returns Condition</button>
-    <button onclick="showTab('manual')">Manual Counts</button>
-    <button onclick="showTab('manifest')">Manifest</button>
-    <button onclick="showTab('loose')">Loose Parts</button>
-    <button onclick="showTab('logs')">Logs</button>
-  </nav>
+  <main class="shell">
+    <nav class="tabs" role="tablist" aria-label="RRPD panels">
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="carriers">Carriers</button>
+      <button class="tab" data-tab="returns">Returns Condition</button>
+      <button class="tab" data-tab="manual">Manual Counts</button>
+      <button class="tab" data-tab="manifest">Manifest</button>
+      <button class="tab" data-tab="loose">Loose Parts</button>
+      <button class="tab" data-tab="logs">Logs</button>
+    </nav>
 
-  <main id="content"></main>
+    <!-- DASHBOARD -->
+    <section id="panel-dashboard" class="panel active">
+      <div class="rules">
+        <strong>Rules:</strong>
+        Tracking rows are ONLY <span class="pill">Return Label</span> / <span class="pill">Packing Slip</span>.
+        Parts are ANY other classification. Part quantities use x2/2x/etc (cap 50).
+      </div>
 
-  <!-- Export Modal -->
-  <div id="exportModal" class="modal hidden">
-    <div class="modal-box">
-      <h2>RRPD Summary Preview</h2>
-      <div id="exportPreview"></div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-label">FedEx (tracking rows)</div>
+          <div id="kpiFedex" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">UPS (tracking rows)</div>
+          <div id="kpiUps" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">USPS (tracking rows)</div>
+          <div id="kpiUsps" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Other (tracking rows)</div>
+          <div id="kpiOther" class="card-value">0</div>
+        </div>
 
-      <label>
-        <input type="checkbox" id="confirmExport" />
-        I confirm this snapshot is correct
-      </label>
+        <div class="card">
+          <div class="card-label">Total Tracking Scans (rows)</div>
+          <div id="kpiTrackingRows" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Unique Tracking Numbers</div>
+          <div id="kpiUniqueTracking" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Parts (pieces)</div>
+          <div id="kpiTotalParts" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Multi-Part Boxes</div>
+          <div id="kpiMultiPartBoxes" class="card-value">0</div>
+        </div>
+      </div>
 
-      <div class="modal-actions">
-        <button onclick="closeExport()">Cancel</button>
-        <button id="pdfBtn" disabled onclick="exportPDF()">Export PDF</button>
-        <button id="xlsBtn" disabled onclick="exportExcel()">Export Excel</button>
+      <div class="two-col">
+        <div class="card block">
+          <div class="card-label">Carrier Scans (Tracking Rows)</div>
+          <canvas id="carrierChart" height="120"></canvas>
+          <div class="hint">Bar chart counts tracking rows by carrier.</div>
+        </div>
+
+        <div class="card block">
+          <div class="card-label">Repeated Tracking Numbers (Top)</div>
+          <div class="hint">Tracking IDs that appear more than once (tracking rows only).</div>
+          <div class="table-wrap">
+            <table class="table" id="repeatedTable">
+              <thead>
+                <tr><th>Tracking</th><th>Scans</th><th>Carrier</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card block">
+        <div class="card-label">Tracking Samples (Latest 25)</div>
+        <div class="hint">On-screen verification only. (Tracking rows only.)</div>
+        <div class="table-wrap">
+          <table class="table" id="sampleTable">
+            <thead>
+              <tr><th>Tracking</th><th>Carrier</th><th>Classification</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- CARRIERS -->
+    <section id="panel-carriers" class="panel">
+      <div class="card block">
+        <div class="card-label">Carrier Breakdown (Tracking Rows)</div>
+        <div class="table-wrap">
+          <table class="table" id="carrierTable">
+            <thead>
+              <tr><th>Carrier</th><th>Tracking Rows</th><th>Unique Trackings</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- RETURNS CONDITION -->
+    <section id="panel-returns" class="panel">
+      <div class="card block">
+        <div class="card-label">Returns Condition (Parts Only)</div>
+        <div class="hint">Counts are in <b>pieces</b>, not rows.</div>
+        <div class="table-wrap">
+          <table class="table" id="conditionTable">
+            <thead>
+              <tr><th>Status / Condition</th><th>Pieces</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANUAL COUNTS -->
+    <section id="panel-manual" class="panel">
+      <div class="card block">
+        <div class="card-label">Manual Counts</div>
+        <div class="hint">Use this if the CSV is missing something you physically counted. (These DO export.)</div>
+
+        <div class="manual-form">
+          <input id="manualBoxId" class="input" placeholder="Box ID / Tracking (optional)" />
+          <input id="manualLabel" class="input" placeholder="Label (example: 'Extra parts found')" />
+          <input id="manualQty" class="input" placeholder="Pieces" type="number" min="1" />
+          <button id="addManualBtn" class="btn">Add Manual Count</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table" id="manualTable">
+            <thead>
+              <tr><th>When</th><th>Box/Tracking</th><th>Label</th><th>Pieces</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANIFEST -->
+    <section id="panel-manifest" class="panel">
+      <div class="card block">
+        <div class="card-label">Manifest (separate CSV)</div>
+        <div class="hint">Upload manifest CSV here. (This DOES export.)</div>
+
+        <div class="manifest-actions">
+          <label class="file-btn">
+            <input id="manifestCsvInput" type="file" accept=".csv,text/csv" />
+            Upload Manifest CSV
+          </label>
+
+          <button id="exportManifestBtn" class="btn">Export Manifest CSV</button>
+          <button id="clearManifestBtn" class="btn danger">Clear Manifest</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table" id="manifestTable">
+            <thead id="manifestThead"></thead>
+            <tbody id="manifestTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOOSE PARTS -->
+    <section id="panel-loose" class="panel">
+      <div class="card block">
+        <div class="card-label">Loose Parts (Parts Only)</div>
+        <div class="hint">Parts where tracking/box id looks empty/invalid. Pieces are applied (xN) with cap 50.</div>
+        <div class="table-wrap">
+          <table class="table" id="looseTable">
+            <thead>
+              <tr><th>Tracking</th><th>Part</th><th>Qty</th><th>Status</th><th>Classification</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section id="panel-logs" class="panel">
+      <div class="card block">
+        <div class="card-label">Logs (ON SITE ONLY — NOT in Excel/PDF)</div>
+        <div class="hint">Saved snapshots for owner visits. Stored in your browser local storage.</div>
+
+        <div class="logs-actions">
+          <button id="clearLogsBtn" class="btn danger">Clear Logs</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table" id="logsTable">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Tracking Rows</th>
+                <th>Unique Tracking</th>
+                <th>Total Parts</th>
+                <th>Multi-Part Boxes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <!-- EXPORT MODAL -->
+  <div id="modalBackdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+
+  <div id="exportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+    <div class="modal-header">
+      <div id="exportTitle" class="modal-title">RRPD Summary Preview</div>
+      <button id="closeModalX" class="icon-btn" aria-label="Close">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="preview">
+        <div class="preview-row">
+          <div><span class="muted">Tracking Rows:</span> <b id="prevTrackingRows">0</b></div>
+          <div><span class="muted">Unique Tracking:</span> <b id="prevUniqueTracking">0</b></div>
+          <div><span class="muted">Total Parts (pieces):</span> <b id="prevTotalParts">0</b></div>
+          <div><span class="muted">Multi-Part Boxes:</span> <b id="prevMultiPartBoxes">0</b></div>
+        </div>
+
+        <label class="confirm">
+          <input id="confirmSnapshot" type="checkbox" />
+          I confirm this snapshot is correct.
+        </label>
       </div>
     </div>
+
+    <div class="modal-footer">
+      <button id="cancelExportBtn" class="btn">Cancel</button>
+      <button id="exportPdfBtn" class="btn">Export PDF</button>
+      <button id="exportExcelBtn" class="btn primary">Export Excel</button>
+    </div>
   </div>
+
+  <footer class="footer">
+    <div id="statusLine">No WH CSV loaded.</div>
+  </footer>
 
   <script src="script.js"></script>
 </body>
