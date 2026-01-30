@@ -1,358 +1,285 @@
-/* RRPD Receiving Dashboard - FINAL
-   - Tracking rows: ONLY classification Return Label / Packing Slip
-   - Parts: everything else
-   - Part qty multiplier: xN / Nx / xN... cap 50
-   - Panels in order: Dashboard, Carriers, Returns Condition, Manual Counts, Manifest, Loose Parts, Logs
-   - Logs stay on site only (localStorage), not exported
-   - Export modal never locks page (Cancel/backdrop/ESC)
+/* RRPD Receiving Dashboard - FINAL (patched)
+   Tracking rows: ONLY classification Return Label / Packing Slip
+   Parts: any other classification
+   Quantity multiplier: xN / Nx / x N / N x (cap 50)
+
+   PATCHES:
+   - No manual double counting: renderAll() recomputes from scratch every time
+   - Logs snapshot recomputes safely (no mutation)
+   - Tracking fallback only runs on tracking rows (prevents part numbers turning into tracking IDs)
+   - Manual delete uses event delegation without {once:true}
 */
 
 (() => {
   "use strict";
 
-  // ---------- Helpers ----------
-  const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  // ----------------------------
+  // Utilities
+  // ----------------------------
+  const $ = (id) => document.getElementById(id);
 
-  const STATUS = $("#statusLine");
-
-  const TRACKING_ONLY_CLASSES = new Set(["return label", "packing slip"]);
-  const MULTIPLIER_CAP = 50;
-
-  function nowIso() {
-    const d = new Date();
-    return d.toISOString();
+  function setText(id, val) {
+    const el = $(id);
+    if (el) el.textContent = String(val);
   }
 
-  function fmtWhen(iso) {
-    try {
-      const d = new Date(iso);
-      return d.toLocaleString();
-    } catch {
-      return iso;
-    }
+  function safeLower(v) {
+    return (v ?? "").toString().trim().toLowerCase();
   }
 
-  function normStr(v) {
-    return (v ?? "").toString().trim();
+  function asString(v) {
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
   }
 
-  function normLower(v) {
-    return normStr(v).toLowerCase();
+  function looksLikeScientific(str) {
+    return /^[0-9]+(\.[0-9]+)?e\+?[0-9]+$/i.test(str.trim());
   }
 
-  function isTrackingClassification(classification) {
-    const c = normLower(classification);
-    return TRACKING_ONLY_CLASSES.has(c);
+  // Convert "1.96367E+11" into a plain integer string (best effort)
+  function sciToPlainString(s) {
+    const t = asString(s);
+    if (!t) return "";
+    if (!looksLikeScientific(t)) return t;
+
+    // WARNING: JS Number can lose precision if value is too large.
+    // These Excel sci values in your screenshots were ~1e11, so safe enough here.
+    const n = Number(t);
+    if (!Number.isFinite(n)) return t;
+    return Math.round(n).toString();
   }
 
-  // Extract qty from strings like:
-  //  "683318050259x2", "683318050259 x2", "x10", "10x", "6833...x10", "6833... 10x"
-  // If no multiplier -> 1
-  // Cap at 50
-  function extractQty(partFieldRaw) {
-    const s = normStr(partFieldRaw);
-    if (!s) return 1;
-
-    // Look for xN or Nx
-    // Examples: "...x2", "x2", "... 2x", "2x"
-    const m1 = s.match(/(?:^|\s|[^a-z0-9])x\s*(\d{1,3})(?:$|\s|[^a-z0-9])/i);
-    const m2 = s.match(/(?:^|\s|[^a-z0-9])(\d{1,3})\s*x(?:$|\s|[^a-z0-9])/i);
+  // Robust multiplier parsing: "x10", "10x", "x 10", "10 x", "*10"
+  // returns { basePart, qty }
+  function parsePartAndQty(partRaw) {
+    let part = asString(partRaw);
+    if (!part) return { basePart: "", qty: 1 };
 
     let qty = 1;
-    if (m1?.[1]) qty = parseInt(m1[1], 10);
-    else if (m2?.[1]) qty = parseInt(m2[1], 10);
+    const cap = 50;
 
-    if (!Number.isFinite(qty) || qty <= 0) qty = 1;
-    if (qty > MULTIPLIER_CAP) qty = MULTIPLIER_CAP;
-    return qty;
+    // normalize spaces
+    let s = part.replace(/\s+/g, " ").trim();
+
+    // capture any multiplier near end
+    const m1 = s.match(/(?:^|[\s\-])x\s*(\d{1,3})\s*$/i);
+    const m2 = s.match(/(?:^|[\s\-])(\d{1,3})\s*x\s*$/i);
+    const m3 = s.match(/(?:^|[\s\-])\*\s*(\d{1,3})\s*$/i);
+
+    let found = null;
+    if (m1) found = m1[1];
+    else if (m2) found = m2[1];
+    else if (m3) found = m3[1];
+
+    if (found) {
+      const n = parseInt(found, 10);
+      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
+
+      // remove trailing multiplier token
+      s = s
+        .replace(/(?:^|[\s\-])x\s*\d{1,3}\s*$/i, "")
+        .replace(/(?:^|[\s\-])\d{1,3}\s*x\s*$/i, "")
+        .replace(/(?:^|[\s\-])\*\s*\d{1,3}\s*$/i, "")
+        .trim();
+    }
+
+    // handle "PARTx2" stuck with no space
+    const stuck = s.match(/^(.*?)(?:x|\*)(\d{1,3})$/i);
+    if (stuck) {
+      const n = parseInt(stuck[2], 10);
+      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
+      s = stuck[1].trim();
+    }
+
+    return { basePart: s, qty };
   }
 
-  // Strip the multiplier suffix to get a cleaner part number display
-  function stripMultiplier(partFieldRaw) {
-    let s = normStr(partFieldRaw);
-    if (!s) return "";
-    // Remove patterns xN or Nx near end or surrounded
-    s = s.replace(/\s*(x\s*\d{1,3}|\d{1,3}\s*x)\s*$/i, "").trim();
-    return s;
-  }
+  function guessCarrier(trackingRaw) {
+    const tracking = asString(trackingRaw);
+    if (!tracking) return "Other";
 
-  function looksEmptyTracking(t) {
-    const s = normStr(t);
-    if (!s) return true;
-    if (normLower(s) === "null") return true;
-    return false;
-  }
+    // UPS: 1Z...
+    if (/^1Z/i.test(tracking)) return "UPS";
 
-  // Carrier guess from explicit field OR tracking pattern
-  function guessCarrier(rowCarrier, tracking) {
-    const c = normLower(rowCarrier);
-    if (c.includes("fedex")) return "FedEx";
-    if (c.includes("ups")) return "UPS";
-    if (c.includes("usps")) return "USPS";
+    // USPS common: 92/93/94/95 + 20-22 digits, or 22 digits starting with 9
+    if (/^(92|93|94|95)\d{20,22}$/.test(tracking)) return "USPS";
+    if (/^9\d{21,22}$/.test(tracking)) return "USPS";
 
-    const t = normStr(tracking).replace(/\s+/g, "");
-
-    // UPS usually starts with 1Z
-    if (/^1Z[0-9A-Z]{8,}$/i.test(t)) return "UPS";
-
-    // USPS often 20-22 digits starting with 9 (not always)
-    if (/^9\d{19,21}$/.test(t)) return "USPS";
-
-    // FedEx common: 12, 15, 20, 22 digits (varies). If it’s long numeric and not USPS pattern, mark FedEx.
-    if (/^\d{12}$/.test(t) || /^\d{15}$/.test(t) || /^\d{20}$/.test(t) || /^\d{22}$/.test(t)) return "FedEx";
+    // FedEx heuristics:
+    if (/^\d{12,15}$/.test(tracking)) return "FedEx";
+    if (/^\d{20,22}$/.test(tracking)) return "FedEx";
 
     return "Other";
   }
 
-  function safeFilename(prefix, ext) {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-    return `${prefix}_${stamp}.${ext}`;
+  function isTrackingClassification(classification) {
+    const c = safeLower(classification);
+    return c === "return label" || c === "packing slip";
   }
 
-  // ---------- State ----------
+  function pickField(row, keys) {
+    for (const k of keys) {
+      if (row && Object.prototype.hasOwnProperty.call(row, k)) {
+        const v = asString(row[k]);
+        if (v) return v;
+      }
+    }
+    // case-insensitive match
+    const rowKeys = Object.keys(row || {});
+    const lowered = rowKeys.map((x) => [x, x.toLowerCase()]);
+    for (const want of keys) {
+      const w = want.toLowerCase();
+      const found = lowered.find((p) => p[1] === w);
+      if (found) {
+        const v = asString(row[found[0]]);
+        if (v) return v;
+      }
+    }
+    return "";
+  }
+
+  // ----------------------------
+  // State
+  // ----------------------------
   const state = {
-    whRows: [],
-    manifest: {
-      headers: [],
-      rows: [],
-    },
-    manualCounts: [],
-    chart: null,
+    rows: [],
+    byTracking: new Map(), // tracking -> aggregate object
+    looseParts: [],        // part rows without valid tracking
+    manual: [],            // manual entries
+    logs: [],
+    chart: null
   };
 
-  // ---------- Column Detection (WH CSV) ----------
-  function detectWhColumns(headers) {
-    const H = headers.map(h => normLower(h));
+  // ----------------------------
+  // Parsing + Aggregation
+  // ----------------------------
+  function resetComputed() {
+    state.byTracking.clear();
+    state.looseParts = [];
+  }
 
-    const findIdx = (preds) => {
-      for (const p of preds) {
-        const idx = H.findIndex(h => h.includes(p));
-        if (idx >= 0) return idx;
+  function upsertAgg(tracking) {
+    if (!state.byTracking.has(tracking)) {
+      state.byTracking.set(tracking, {
+        tracking,
+        carrier: guessCarrier(tracking),
+        trackingRows: 0,
+        partsPieces: 0,
+        partRows: 0,
+        parts: [],        // {part, qty, status}
+        classifications: new Map()
+      });
+    }
+    return state.byTracking.get(tracking);
+  }
+
+  function computeFromRows(rows) {
+    resetComputed();
+
+    const classificationKeys = [
+      "Classification", "classification", "Type", "type", "Category", "category"
+    ];
+
+    const trackingKeys = [
+      "Tracking", "tracking", "Tracking Number", "tracking number",
+      "TrackingNumber", "trackingNumber",
+      "Return Tracking", "return tracking"
+    ];
+
+    const partKeys = [
+      "Deposo PN", "DeposoPN", "Part", "Part Number", "PartNumber", "part", "part number"
+    ];
+
+    const statusKeys = ["Status", "status", "Condition", "condition"];
+    const qtyKeys = ["Qty", "qty", "Quantity", "quantity", "Pieces", "pieces"];
+
+    for (const row of rows) {
+      const classification = pickField(row, classificationKeys);
+      const isTrackingRow = isTrackingClassification(classification);
+
+      let tracking = pickField(row, trackingKeys);
+
+      // IMPORTANT PATCH:
+      // Only guess tracking from random cells IF it's a tracking row.
+      if (!tracking && isTrackingRow) {
+        const values = Object.values(row || {}).map(asString).filter(Boolean);
+        const candidate = values.find(v =>
+          /^1Z/i.test(v) || /^\d{12,22}$/.test(v) || looksLikeScientific(v)
+        );
+        tracking = candidate ? candidate : "";
       }
-      return -1;
-    };
 
-    // flexible mapping
-    const idxTracking = findIdx(["tracking", "track"]);
-    const idxCarrier = findIdx(["carrier", "shipper"]);
-    const idxClass = findIdx(["classification", "class", "type"]);
-    const idxPart = findIdx(["part number", "part", "pn"]);
-    const idxStatus = findIdx(["status", "condition"]);
-    const idxNotes = findIdx(["notes", "note", "comment"]);
-    const idxUser = findIdx(["user", "employee", "operator"]);
+      tracking = sciToPlainString(tracking);
 
-    return { idxTracking, idxCarrier, idxClass, idxPart, idxStatus, idxNotes, idxUser };
-  }
+      const status = pickField(row, statusKeys);
 
-  function whRowFromCsvRow(csvRow, cols) {
-    const vals = Array.isArray(csvRow) ? csvRow : [];
-    const get = (i) => (i >= 0 ? vals[i] : "");
+      // PART row logic
+      if (!isTrackingRow) {
+        let partRaw = pickField(row, partKeys);
 
-    const tracking = normStr(get(cols.idxTracking));
-    const carrierRaw = normStr(get(cols.idxCarrier));
-    const classification = normStr(get(cols.idxClass));
-    const partField = normStr(get(cols.idxPart));
-    const status = normStr(get(cols.idxStatus));
-    const notes = normStr(get(cols.idxNotes));
-    const user = normStr(get(cols.idxUser));
+        // fallback: pick first non-tracking-like value
+        if (!partRaw) {
+          const values = Object.values(row || {}).map(asString).filter(Boolean);
+          partRaw = values.find(v =>
+            !/^1Z/i.test(v) &&
+            !/^\d{12,22}$/.test(v) &&
+            !looksLikeScientific(v)
+          ) || "";
+        }
 
-    const carrier = guessCarrier(carrierRaw, tracking);
-    const isTrackingRow = isTrackingClassification(classification);
+        const qtyFromColumnRaw = pickField(row, qtyKeys);
+        let qtyFromColumn = 0;
+        if (qtyFromColumnRaw) {
+          const n = parseInt(qtyFromColumnRaw.replace(/[^\d]/g, ""), 10);
+          if (Number.isFinite(n) && n > 0) qtyFromColumn = Math.min(n, 50);
+        }
 
-    const qty = isTrackingRow ? 0 : extractQty(partField);
-    const partNo = isTrackingRow ? "" : stripMultiplier(partField);
+        const parsed = parsePartAndQty(partRaw);
+        const qty = qtyFromColumn > 0 ? qtyFromColumn : parsed.qty;
+        const basePart = parsed.basePart || partRaw;
 
-    return {
-      tracking,
-      carrier,
-      classification,
-      isTrackingRow,
-      partField,
-      partNo,
-      qty,
-      status,
-      notes,
-      user,
-    };
-  }
+        const partObj = { part: basePart || "(blank)", qty, status: status || "" };
 
-  // ---------- Compute Metrics ----------
-  function computeAll() {
-    const wh = state.whRows;
+        if (tracking) {
+          const agg = upsertAgg(tracking);
+          agg.partRows += 1;
+          agg.partsPieces += qty;
+          agg.parts.push(partObj);
+        } else {
+          state.looseParts.push({ ...partObj, rawTracking: tracking || "" });
+        }
 
-    const trackingRows = wh.filter(r => r.isTrackingRow && !looksEmptyTracking(r.tracking));
-    const partsRows = wh.filter(r => !r.isTrackingRow); // parts can exist even if tracking missing
+      } else {
+        // TRACKING row logic
+        if (!tracking) continue;
+        const agg = upsertAgg(tracking);
+        agg.trackingRows += 1;
 
-    // Carrier counts (tracking rows only)
-    const carrierCounts = { "FedEx": 0, "UPS": 0, "USPS": 0, "Other": 0 };
-    for (const r of trackingRows) carrierCounts[r.carrier] = (carrierCounts[r.carrier] ?? 0) + 1;
-
-    // Tracking IDs
-    const trackingFreq = new Map();
-    const trackingToCarrier = new Map();
-    for (const r of trackingRows) {
-      const t = normStr(r.tracking);
-      if (!t) continue;
-      trackingFreq.set(t, (trackingFreq.get(t) ?? 0) + 1);
-      if (!trackingToCarrier.has(t)) trackingToCarrier.set(t, r.carrier);
-    }
-    const uniqueTracking = trackingFreq.size;
-
-    // Repeated tracking list
-    const repeated = Array.from(trackingFreq.entries())
-      .filter(([, c]) => c > 1)
-      .map(([t, c]) => ({ tracking: t, scans: c, carrier: trackingToCarrier.get(t) ?? "Other" }))
-      .sort((a, b) => b.scans - a.scans || a.tracking.localeCompare(b.tracking));
-
-    // Parts total in pieces (qty)
-    const totalParts = partsRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-
-    // Multi-part boxes: group parts by tracking/box id; count boxes with total parts > 1
-    const boxParts = new Map(); // tracking -> pieces
-    for (const r of partsRows) {
-      const key = normStr(r.tracking) || "(no tracking)";
-      boxParts.set(key, (boxParts.get(key) ?? 0) + (Number(r.qty) || 0));
-    }
-    let multiPartBoxes = 0;
-    for (const [, pieces] of boxParts.entries()) if (pieces > 1) multiPartBoxes++;
-
-    // Returns condition table (parts only, in pieces)
-    const condition = new Map(); // status -> pieces
-    for (const r of partsRows) {
-      const key = normStr(r.status) || "Unknown";
-      condition.set(key, (condition.get(key) ?? 0) + (Number(r.qty) || 0));
-    }
-    const conditionRows = Array.from(condition.entries())
-      .map(([status, pieces]) => ({ status, pieces }))
-      .sort((a, b) => b.pieces - a.pieces || a.status.localeCompare(b.status));
-
-    // Loose parts: parts rows where tracking empty/null
-    const looseParts = partsRows
-      .filter(r => looksEmptyTracking(r.tracking))
-      .map(r => ({
-        tracking: r.tracking,
-        part: r.partNo || r.partField || "(no part)",
-        qty: r.qty || 1,
-        status: r.status || "Unknown",
-        classification: r.classification || "(blank)"
-      }));
-
-    // Samples latest 25 (tracking rows only)
-    const samples = trackingRows
-      .slice(-25)
-      .reverse()
-      .map(r => ({
-        tracking: r.tracking,
-        carrier: r.carrier,
-        classification: r.classification
-      }));
-
-    // Carrier table rows
-    const carrierTable = ["FedEx", "UPS", "USPS", "Other"].map(name => {
-      const ids = trackingRows.filter(r => r.carrier === name).map(r => normStr(r.tracking)).filter(Boolean);
-      return {
-        carrier: name,
-        rows: carrierCounts[name] ?? 0,
-        unique: new Set(ids).size
-      };
-    });
-
-    return {
-      carrierCounts,
-      trackingRowsCount: trackingRows.length,
-      uniqueTracking,
-      totalParts,
-      multiPartBoxes,
-      repeated,
-      samples,
-      carrierTable,
-      conditionRows,
-      looseParts
-    };
-  }
-
-  // ---------- Render ----------
-  function setText(id, v) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = String(v);
-  }
-
-  function renderKpis(m) {
-    setText("kpiFedex", m.carrierCounts["FedEx"] ?? 0);
-    setText("kpiUps", m.carrierCounts["UPS"] ?? 0);
-    setText("kpiUsps", m.carrierCounts["USPS"] ?? 0);
-    setText("kpiOther", m.carrierCounts["Other"] ?? 0);
-    setText("kpiTrackingRows", m.trackingRowsCount);
-    setText("kpiUniqueTracking", m.uniqueTracking);
-    setText("kpiTotalParts", m.totalParts);
-    setText("kpiMultiPartBoxes", m.multiPartBoxes);
-  }
-
-  function renderRepeated(m) {
-    const tbody = $("#repeatedTable tbody");
-    tbody.innerHTML = "";
-    const top = m.repeated.slice(0, 25);
-    for (const r of top) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(r.tracking)}</td><td>${r.scans}</td><td>${escapeHtml(r.carrier)}</td>`;
-      tbody.appendChild(tr);
+        const c = safeLower(classification) || "(blank)";
+        agg.classifications.set(c, (agg.classifications.get(c) || 0) + 1);
+      }
     }
   }
 
-  function renderSamples(m) {
-    const tbody = $("#sampleTable tbody");
-    tbody.innerHTML = "";
-    for (const r of m.samples) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(r.tracking)}</td><td>${escapeHtml(r.carrier)}</td><td>${escapeHtml(r.classification)}</td>`;
-      tbody.appendChild(tr);
+  function applyManual() {
+    for (const m of state.manual) {
+      const tracking = asString(m.tracking);
+      if (!tracking) continue;
+      const agg = upsertAgg(tracking);
+      agg.carrier = m.carrier || agg.carrier;
+      agg.partsPieces += m.pieces;
     }
   }
 
-  function renderCarrierTable(m) {
-    const tbody = $("#carrierTable tbody");
-    tbody.innerHTML = "";
-    for (const r of m.carrierTable) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(r.carrier)}</td><td>${r.rows}</td><td>${r.unique}</td>`;
-      tbody.appendChild(tr);
-    }
-  }
-
-  function renderCondition(m) {
-    const tbody = $("#conditionTable tbody");
-    tbody.innerHTML = "";
-    for (const r of m.conditionRows) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(r.status)}</td><td>${r.pieces}</td>`;
-      tbody.appendChild(tr);
-    }
-  }
-
-  function renderLoose(m) {
-    const tbody = $("#looseTable tbody");
-    tbody.innerHTML = "";
-    const rows = m.looseParts.slice(0, 250);
-    for (const r of rows) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${escapeHtml(r.tracking || "")}</td>
-                      <td>${escapeHtml(r.part)}</td>
-                      <td>${r.qty}</td>
-                      <td>${escapeHtml(r.status)}</td>
-                      <td>${escapeHtml(r.classification)}</td>`;
-      tbody.appendChild(tr);
-    }
-  }
-
-  function renderChart(m) {
-    const ctx = $("#carrierChart");
-    if (!ctx) return;
+  // ----------------------------
+  // Rendering
+  // ----------------------------
+  function updateChart(counts) {
+    const canvas = $("carrierChart");
+    if (!canvas) return;
 
     const labels = ["FedEx", "UPS", "USPS", "Other"];
-    const data = labels.map(k => m.carrierCounts[k] ?? 0);
+    const data = [counts.FedEx, counts.UPS, counts.USPS, counts.Other];
 
     if (state.chart) {
       state.chart.data.labels = labels;
@@ -361,7 +288,7 @@
       return;
     }
 
-    state.chart = new Chart(ctx, {
+    state.chart = new Chart(canvas, {
       type: "bar",
       data: {
         labels,
@@ -372,534 +299,510 @@
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false }
-        },
-        scales: {
-          y: { beginAtZero: true, ticks: { precision: 0 } }
-        }
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
       }
     });
   }
 
-  function renderManual() {
-    const tbody = $("#manualTable tbody");
-    tbody.innerHTML = "";
-    for (const item of state.manualCounts) {
+  function renderManualTable() {
+    const body = $("tblManual")?.querySelector("tbody");
+    if (!body) return;
+
+    body.innerHTML = "";
+    state.manual.forEach((m, idx) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${escapeHtml(fmtWhen(item.when))}</td>
-        <td>${escapeHtml(item.box || "")}</td>
-        <td>${escapeHtml(item.label)}</td>
-        <td>${item.qty}</td>
-        <td><button class="btn danger" data-remove-manual="${item.id}">Remove</button></td>
+        <td>${m.tracking}</td>
+        <td>${m.carrier}</td>
+        <td>${m.pieces}</td>
+        <td><button class="btn danger" data-del="${idx}">Delete</button></td>
       `;
-      tbody.appendChild(tr);
-    }
+      body.appendChild(tr);
+    });
   }
 
-  function renderManifest() {
-    const thead = $("#manifestThead");
-    const tbody = $("#manifestTbody");
-    thead.innerHTML = "";
-    tbody.innerHTML = "";
+  function renderLogsTable() {
+    const body = $("tblLogs")?.querySelector("tbody");
+    if (!body) return;
 
-    if (!state.manifest.headers.length) {
-      thead.innerHTML = "<tr><th>No manifest loaded</th></tr>";
-      return;
-    }
-
-    // header row
-    const hr = document.createElement("tr");
-    for (const h of state.manifest.headers) {
-      const th = document.createElement("th");
-      th.textContent = h;
-      hr.appendChild(th);
-    }
-    thead.appendChild(hr);
-
-    // rows (limit render for performance)
-    const rows = state.manifest.rows.slice(0, 500);
-    for (const r of rows) {
+    body.innerHTML = "";
+    state.logs.forEach((l, idx) => {
       const tr = document.createElement("tr");
-      for (let i = 0; i < state.manifest.headers.length; i++) {
-        const td = document.createElement("td");
-        td.textContent = (r[i] ?? "");
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    }
+      tr.innerHTML = `
+        <td>${l.when}</td>
+        <td>${l.note || ""}</td>
+        <td>${l.totalParts}</td>
+        <td>${l.uniqueTracking}</td>
+        <td><button class="btn danger" data-del="${idx}">Delete</button></td>
+      `;
+      body.appendChild(tr);
+    });
   }
 
   function renderAll() {
-    const m = computeAll();
+    // ✅ CRITICAL PATCH: always recompute cleanly
+    computeFromRows(state.rows);
+    applyManual();
 
-    renderKpis(m);
-    renderRepeated(m);
-    renderSamples(m);
-    renderCarrierTable(m);
-    renderCondition(m);
-    renderLoose(m);
-    renderChart(m);
-    renderManual();
-    renderManifest();
+    let counts = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
+    let totalScans = 0;
+    let uniqueTracking = 0;
+    let totalParts = 0;
+    let multiPartBoxes = 0;
 
-    // modal preview values
-    setText("prevTrackingRows", m.trackingRowsCount);
-    setText("prevUniqueTracking", m.uniqueTracking);
-    setText("prevTotalParts", m.totalParts);
-    setText("prevMultiPartBoxes", m.multiPartBoxes);
+    const list = Array.from(state.byTracking.values());
 
-    return m;
+    for (const agg of list) {
+      uniqueTracking += 1;
+      totalScans += agg.trackingRows;
+      totalParts += agg.partsPieces;
+      if (agg.partsPieces > 1) multiPartBoxes += 1;
+
+      counts[agg.carrier] = (counts[agg.carrier] || 0) + agg.trackingRows;
+    }
+
+    setText("mFedEx", counts.FedEx || 0);
+    setText("mUPS", counts.UPS || 0);
+    setText("mUSPS", counts.USPS || 0);
+    setText("mOther", counts.Other || 0);
+    setText("mTotalScans", totalScans);
+    setText("mUniqueTracking", uniqueTracking);
+    setText("mTotalParts", totalParts);
+    setText("mMultiPartBoxes", multiPartBoxes);
+
+    updateChart({
+      FedEx: counts.FedEx || 0,
+      UPS: counts.UPS || 0,
+      USPS: counts.USPS || 0,
+      Other: counts.Other || 0
+    });
+
+    // samples latest 25
+    const samplesBody = $("tblSamples")?.querySelector("tbody");
+    if (samplesBody) {
+      samplesBody.innerHTML = "";
+      const latest = list.slice(-25).reverse();
+      latest.forEach((agg, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i + 1}</td><td>${agg.tracking}</td><td>${agg.carrier}</td><td>${agg.partsPieces}</td>`;
+        samplesBody.appendChild(tr);
+      });
+    }
+
+    // repeated tracking
+    const repBody = $("tblRepeated")?.querySelector("tbody");
+    if (repBody) {
+      repBody.innerHTML = "";
+      const repeated = list
+        .filter(a => a.trackingRows > 1)
+        .sort((a, b) => b.trackingRows - a.trackingRows)
+        .slice(0, 25);
+
+      repeated.forEach((agg) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${agg.tracking}</td><td>${agg.trackingRows}</td><td>${agg.carrier}</td>`;
+        repBody.appendChild(tr);
+      });
+    }
+
+    // carriers table
+    const carriersBody = $("tblCarriers")?.querySelector("tbody");
+    if (carriersBody) {
+      carriersBody.innerHTML = "";
+      ["FedEx", "UPS", "USPS", "Other"].forEach((c) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${c}</td><td>${counts[c] || 0}</td>`;
+        carriersBody.appendChild(tr);
+      });
+    }
+
+    // returns condition summary
+    const returnsBody = $("tblReturns")?.querySelector("tbody");
+    if (returnsBody) {
+      returnsBody.innerHTML = "";
+      const statusMap = new Map(); // status -> {rows, pieces}
+
+      for (const agg of list) {
+        for (const p of agg.parts) {
+          const key = asString(p.status) || "(blank)";
+          if (!statusMap.has(key)) statusMap.set(key, { rows: 0, pieces: 0 });
+          const obj = statusMap.get(key);
+          obj.rows += 1;
+          obj.pieces += (p.qty || 1);
+        }
+      }
+
+      const sorted = Array.from(statusMap.entries()).sort((a, b) => b[1].pieces - a[1].pieces);
+      sorted.forEach(([status, v]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${status}</td><td>${v.rows}</td><td>${v.pieces}</td>`;
+        returnsBody.appendChild(tr);
+      });
+    }
+
+    // manifest
+    const manBody = $("tblManifest")?.querySelector("tbody");
+    if (manBody) {
+      manBody.innerHTML = "";
+      const sorted = list.slice().sort((a, b) => b.partsPieces - a.partsPieces);
+      sorted.forEach((agg) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${agg.tracking}</td><td>${agg.carrier}</td><td>${agg.trackingRows}</td><td>${agg.partsPieces}</td>`;
+        manBody.appendChild(tr);
+      });
+    }
+
+    // loose parts
+    const looseBody = $("tblLoose")?.querySelector("tbody");
+    if (looseBody) {
+      looseBody.innerHTML = "";
+      state.looseParts.forEach((p) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${p.part}</td><td>${p.qty}</td><td>${p.status || ""}</td><td>${p.rawTracking || ""}</td>`;
+        looseBody.appendChild(tr);
+      });
+    }
+
+    renderManualTable();
+    renderLogsTable();
+
+    setText("pTotalScans", totalScans);
+    setText("pUnique", uniqueTracking);
+    setText("pParts", totalParts);
+    setText("pMulti", multiPartBoxes);
+
+    const statusLine = $("statusLine");
+    if (statusLine) {
+      statusLine.textContent =
+        uniqueTracking === 0 && state.rows.length === 0 && state.manual.length === 0
+          ? "No WH CSV loaded."
+          : `Loaded ${state.rows.length} CSV rows. Unique tracking: ${uniqueTracking}. Total parts (pieces): ${totalParts}.`;
+    }
   }
 
-  function escapeHtml(s) {
-    return normStr(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+  // ----------------------------
+  // Tabs
+  // ----------------------------
+  function setActiveTab(tabName) {
+    document.querySelectorAll(".tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === tabName);
+    });
+    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+    const panel = $(`panel-${tabName}`);
+    if (panel) panel.classList.add("active");
   }
 
-  // ---------- Tabs ----------
-  function initTabs() {
-    $$(".tab").forEach(btn => {
-      btn.addEventListener("click", () => {
-        $$(".tab").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
+  function bindTabs() {
+    const tabs = $("tabs");
+    if (!tabs) return;
+    tabs.addEventListener("click", (e) => {
+      const btn = e.target.closest(".tab");
+      if (!btn) return;
+      setActiveTab(btn.dataset.tab);
+    });
+  }
 
-        const name = btn.dataset.tab;
-        $$(".panel").forEach(p => p.classList.remove("active"));
-        $("#panel-" + name).classList.add("active");
+  // ----------------------------
+  // Modal
+  // ----------------------------
+  function showSummaryModal() {
+    const modal = $("modalSummary");
+    const backdrop = $("modalBackdrop");
+    if (!modal || !backdrop) return;
+
+    const chk = $("chkConfirm");
+    if (chk) chk.checked = false;
+
+    backdrop.classList.remove("hidden");
+    modal.classList.remove("hidden");
+  }
+
+  function hideSummaryModal() {
+    const modal = $("modalSummary");
+    const backdrop = $("modalBackdrop");
+    if (!modal || !backdrop) return;
+    modal.classList.add("hidden");
+    backdrop.classList.add("hidden");
+  }
+
+  function bindModal() {
+    $("modalBackdrop")?.addEventListener("click", hideSummaryModal);
+    $("btnModalX")?.addEventListener("click", hideSummaryModal);
+    $("btnModalCancel")?.addEventListener("click", hideSummaryModal);
+  }
+
+  // ----------------------------
+  // CSV load
+  // ----------------------------
+  function bindCSV() {
+    const input = $("csvFile");
+    if (!input) return;
+
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (res) => {
+          state.rows = Array.isArray(res.data) ? res.data : [];
+          computeFromRows(state.rows);
+          renderAll();
+        },
+        error: (err) => {
+          console.error("CSV parse error:", err);
+          alert("CSV parse error. Check the file format.");
+        }
       });
     });
   }
 
-  // ---------- CSV Loading ----------
-  function loadWhCsv(file) {
-    if (!file) return;
+  // ----------------------------
+  // Manual
+  // ----------------------------
+  function bindManual() {
+    $("btnManualAdd")?.addEventListener("click", () => {
+      const tracking = asString($("manTracking")?.value);
+      const carrier = asString($("manCarrier")?.value) || "Other";
+      const piecesRaw = asString($("manPieces")?.value);
 
-    STATUS.textContent = `Loading WH CSV: ${file.name} ...`;
+      const pieces = parseInt(piecesRaw.replace(/[^\d]/g, ""), 10);
+      if (!tracking) return alert("Enter Tracking ID.");
+      if (!Number.isFinite(pieces) || pieces <= 0) return alert("Enter a valid pieces number.");
 
-    Papa.parse(file, {
-      skipEmptyLines: true,
-      complete: (res) => {
-        const data = res.data || [];
-        if (!data.length) {
-          STATUS.textContent = "WH CSV loaded but empty.";
-          state.whRows = [];
-          renderAll();
-          return;
-        }
+      state.manual.push({ tracking, carrier, pieces: Math.min(pieces, 999999) });
+      renderAll();
+    });
 
-        const headers = data[0].map(h => normStr(h));
-        const cols = detectWhColumns(headers);
+    $("btnManualClear")?.addEventListener("click", () => {
+      if ($("manTracking")) $("manTracking").value = "";
+      if ($("manPieces")) $("manPieces").value = "";
+      if ($("manCarrier")) $("manCarrier").value = "FedEx";
+    });
 
-        // If we cannot detect required fields, try fallback with best guess columns:
-        // tracking = col0, classification = last col? part = some middle
-        // but we still keep it safe.
-        const body = data.slice(1);
-        const rows = body.map(r => whRowFromCsvRow(r, cols));
-
-        state.whRows = rows;
-
-        // reset modal checkbox each load
-        $("#confirmSnapshot").checked = false;
-
-        STATUS.textContent = `WH CSV loaded: ${file.name} (${rows.length} rows parsed)`;
+    // event delegation for delete
+    const body = $("tblManual")?.querySelector("tbody");
+    if (body) {
+      body.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-del]");
+        if (!btn) return;
+        const i = parseInt(btn.dataset.del, 10);
+        if (!Number.isFinite(i)) return;
+        state.manual.splice(i, 1);
         renderAll();
-      },
-      error: (err) => {
-        console.error(err);
-        STATUS.textContent = "Failed to parse WH CSV.";
-      }
-    });
+      });
+    }
   }
 
-  function loadManifestCsv(file) {
-    if (!file) return;
-
-    STATUS.textContent = `Loading Manifest CSV: ${file.name} ...`;
-
-    Papa.parse(file, {
-      skipEmptyLines: true,
-      complete: (res) => {
-        const data = res.data || [];
-        if (!data.length) {
-          state.manifest.headers = [];
-          state.manifest.rows = [];
-          STATUS.textContent = "Manifest loaded but empty.";
-          renderManifest();
-          return;
-        }
-
-        state.manifest.headers = (data[0] || []).map(h => normStr(h) || "(blank)");
-        state.manifest.rows = (data.slice(1) || []).map(r => (Array.isArray(r) ? r : []));
-
-        STATUS.textContent = `Manifest loaded: ${file.name} (${state.manifest.rows.length} rows)`;
-        renderManifest();
-      },
-      error: (err) => {
-        console.error(err);
-        STATUS.textContent = "Failed to parse manifest CSV.";
-      }
-    });
-  }
-
-  // ---------- Logs ----------
+  // ----------------------------
+  // Logs
+  // ----------------------------
   const LOG_KEY = "rrpd_logs_v2";
+
   function loadLogs() {
     try {
       const raw = localStorage.getItem(LOG_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
       return Array.isArray(arr) ? arr : [];
     } catch {
       return [];
     }
   }
 
-  function saveLogs(arr) {
-    localStorage.setItem(LOG_KEY, JSON.stringify(arr));
+  function saveLogs() {
+    localStorage.setItem(LOG_KEY, JSON.stringify(state.logs));
   }
 
-  function renderLogsTable() {
-    const logs = loadLogs();
-    const tbody = $("#logsTable tbody");
-    tbody.innerHTML = "";
+  function exportLogsCSV() {
+    const header = ["when", "note", "totalParts", "uniqueTracking", "totalScans"];
+    const lines = [header.join(",")];
 
-    for (const l of logs) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${escapeHtml(fmtWhen(l.when))}</td>
-        <td>${l.trackingRows}</td>
-        <td>${l.uniqueTracking}</td>
-        <td>${l.totalParts}</td>
-        <td>${l.multiPartBoxes}</td>
-        <td><button class="btn danger" data-remove-log="${l.id}">Remove</button></td>
-      `;
-      tbody.appendChild(tr);
+    for (const l of state.logs) {
+      lines.push([
+        l.when,
+        `"${(l.note || "").replace(/"/g, '""')}"`,
+        l.totalParts,
+        l.uniqueTracking,
+        l.totalScans
+      ].join(","));
+    }
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    saveAs(blob, `rrpd_logs_${new Date().toISOString().slice(0,10)}.csv`);
+  }
+
+  function bindLogs() {
+    state.logs = loadLogs();
+    renderLogsTable();
+
+    $("btnLogAdd")?.addEventListener("click", () => {
+      // safe snapshot
+      computeFromRows(state.rows);
+      applyManual();
+      const list = Array.from(state.byTracking.values());
+
+      const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
+      const uniqueTracking = list.length;
+      const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
+
+      state.logs.unshift({
+        when: new Date().toLocaleString(),
+        note: asString($("logNote")?.value),
+        totalParts,
+        uniqueTracking,
+        totalScans
+      });
+
+      saveLogs();
+      renderLogsTable();
+    });
+
+    $("btnLogExport")?.addEventListener("click", exportLogsCSV);
+
+    $("btnLogClearAll")?.addEventListener("click", () => {
+      if (!confirm("Delete all logs?")) return;
+      state.logs = [];
+      saveLogs();
+      renderLogsTable();
+    });
+
+    const body = $("tblLogs")?.querySelector("tbody");
+    if (body) {
+      body.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-del]");
+        if (!btn) return;
+        const i = parseInt(btn.dataset.del, 10);
+        if (!Number.isFinite(i)) return;
+        state.logs.splice(i, 1);
+        saveLogs();
+        renderLogsTable();
+      });
     }
   }
 
-  function addLogSnapshot() {
-    const m = computeAll();
-    const logs = loadLogs();
-    logs.unshift({
-      id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
-      when: nowIso(),
-      trackingRows: m.trackingRowsCount,
-      uniqueTracking: m.uniqueTracking,
-      totalParts: m.totalParts,
-      multiPartBoxes: m.multiPartBoxes,
-    });
-    saveLogs(logs);
-    renderLogsTable();
-    STATUS.textContent = "Saved snapshot to Logs (site-only).";
-  }
-
-  // ---------- Export Modal (fix: never blocks clicks when hidden) ----------
-  function openModal() {
-    $("#confirmSnapshot").checked = false;
-    $("#modalBackdrop").classList.remove("hidden");
-    $("#exportModal").classList.remove("hidden");
-    $("#modalBackdrop").setAttribute("aria-hidden", "false");
-  }
-
-  function closeModal() {
-    $("#modalBackdrop").classList.add("hidden");
-    $("#exportModal").classList.add("hidden");
-    $("#modalBackdrop").setAttribute("aria-hidden", "true");
-    $("#confirmSnapshot").checked = false;
-  }
-
-  function initModal() {
-    $("#exportSummaryBtn").addEventListener("click", () => {
-      renderAll(); // refresh preview numbers first
-      openModal();
-    });
-
-    $("#cancelExportBtn").addEventListener("click", closeModal);
-    $("#closeModalX").addEventListener("click", closeModal);
-
-    // backdrop click closes
-    $("#modalBackdrop").addEventListener("click", closeModal);
-
-    // ESC closes
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !$("#exportModal").classList.contains("hidden")) {
-        closeModal();
-      }
-    });
-  }
-
-  function requireConfirmed() {
-    if (!$("#confirmSnapshot").checked) {
-      alert("Please confirm the snapshot checkbox before exporting.");
+  // ----------------------------
+  // Export Summary
+  // ----------------------------
+  function requireConfirm() {
+    const chk = $("chkConfirm");
+    if (!chk || !chk.checked) {
+      alert("Please check: 'I confirm this snapshot is correct.'");
       return false;
     }
     return true;
   }
 
-  // ---------- Export: Excel ----------
-  async function exportExcel() {
-    if (!requireConfirmed()) return;
-
-    const m = computeAll();
-
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "RRPD Receiving V2";
-
-    // Dashboard sheet
-    const s1 = wb.addWorksheet("Dashboard");
-    s1.addRow(["Metric", "Value"]);
-    s1.addRow(["Tracking Rows (Return Label/Packing Slip)", m.trackingRowsCount]);
-    s1.addRow(["Unique Tracking Numbers", m.uniqueTracking]);
-    s1.addRow(["Total Parts (pieces)", m.totalParts]);
-    s1.addRow(["Multi-Part Boxes", m.multiPartBoxes]);
-    s1.addRow([]);
-    s1.addRow(["Carrier", "Tracking Rows"]);
-    for (const k of ["FedEx", "UPS", "USPS", "Other"]) s1.addRow([k, m.carrierCounts[k] ?? 0]);
-
-    // Repeated tracking sheet
-    const s2 = wb.addWorksheet("Repeated Tracking");
-    s2.addRow(["Tracking", "Scans", "Carrier"]);
-    m.repeated.slice(0, 500).forEach(r => s2.addRow([r.tracking, r.scans, r.carrier]));
-
-    // Returns condition sheet (parts only)
-    const s3 = wb.addWorksheet("Returns Condition");
-    s3.addRow(["Status/Condition", "Pieces"]);
-    m.conditionRows.forEach(r => s3.addRow([r.status, r.pieces]));
-
-    // Manual counts (these DO export)
-    const s4 = wb.addWorksheet("Manual Counts");
-    s4.addRow(["When", "Box/Tracking", "Label", "Pieces"]);
-    state.manualCounts.forEach(x => s4.addRow([fmtWhen(x.when), x.box, x.label, x.qty]));
-
-    // Manifest (exports)
-    const s5 = wb.addWorksheet("Manifest");
-    if (state.manifest.headers.length) {
-      s5.addRow(state.manifest.headers);
-      state.manifest.rows.forEach(r => s5.addRow(r));
-    } else {
-      s5.addRow(["No manifest loaded"]);
-    }
-
-    // Loose parts (exports)
-    const s6 = wb.addWorksheet("Loose Parts");
-    s6.addRow(["Tracking", "Part", "Qty", "Status", "Classification"]);
-    m.looseParts.slice(0, 2000).forEach(r => {
-      s6.addRow([r.tracking || "", r.part, r.qty, r.status, r.classification]);
-    });
-
-    // IMPORTANT: Logs are NOT exported
-
-    const buf = await wb.xlsx.writeBuffer();
-    saveAs(new Blob([buf]), safeFilename("RRPD_Summary", "xlsx"));
-    STATUS.textContent = "Excel exported.";
-    closeModal();
+  function buildSummaryRows() {
+    const list = Array.from(state.byTracking.values());
+    return list
+      .slice()
+      .sort((a, b) => b.partsPieces - a.partsPieces)
+      .map(a => [a.tracking, a.carrier, a.trackingRows, a.partsPieces]);
   }
 
-  // ---------- Export: PDF ----------
-  function exportPdf() {
-    if (!requireConfirmed()) return;
+  function exportPDF() {
+    if (!requireConfirm()) return;
 
-    const m = computeAll();
+    computeFromRows(state.rows);
+    applyManual();
+    const list = Array.from(state.byTracking.values());
+
+    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
+    const uniqueTracking = list.length;
+    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
+    const multi = list.filter(x => x.partsPieces > 1).length;
+
     const { jsPDF } = window.jspdf;
-
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
     doc.setFontSize(16);
     doc.text("RRPD Receiving Summary", 40, 50);
-
     doc.setFontSize(11);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 70);
+    doc.text(`Total Scans (tracking rows): ${totalScans}`, 40, 88);
+    doc.text(`Unique Tracking: ${uniqueTracking}`, 40, 104);
+    doc.text(`Total Parts (pieces): ${totalParts}`, 40, 120);
+    doc.text(`Multi-Part Boxes: ${multi}`, 40, 136);
 
     doc.autoTable({
-      startY: 90,
-      head: [["Metric", "Value"]],
-      body: [
-        ["Tracking Rows (Return Label/Packing Slip)", String(m.trackingRowsCount)],
-        ["Unique Tracking Numbers", String(m.uniqueTracking)],
-        ["Total Parts (pieces)", String(m.totalParts)],
-        ["Multi-Part Boxes", String(m.multiPartBoxes)],
-      ],
-      theme: "grid",
-      styles: { fontSize: 10 },
-      headStyles: { fillColor: [25, 40, 70] }
+      startY: 160,
+      head: [["Tracking", "Carrier", "Tracking Rows", "Pieces"]],
+      body: buildSummaryRows(),
+      styles: { fontSize: 9 }
     });
 
-    doc.autoTable({
-      startY: doc.lastAutoTable.finalY + 18,
-      head: [["Carrier", "Tracking Rows"]],
-      body: ["FedEx", "UPS", "USPS", "Other"].map(k => [k, String(m.carrierCounts[k] ?? 0)]),
-      theme: "grid",
-      styles: { fontSize: 10 },
-      headStyles: { fillColor: [25, 40, 70] }
-    });
+    doc.save(`rrpd_summary_${new Date().toISOString().slice(0,10)}.pdf`);
+  }
 
-    doc.autoTable({
-      startY: doc.lastAutoTable.finalY + 18,
-      head: [["Repeated Tracking (Top)", "Scans", "Carrier"]],
-      body: m.repeated.slice(0, 25).map(r => [r.tracking, String(r.scans), r.carrier]),
-      theme: "grid",
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [25, 40, 70] }
-    });
+  async function exportExcel() {
+    if (!requireConfirm()) return;
 
-    doc.autoTable({
-      startY: doc.lastAutoTable.finalY + 18,
-      head: [["Returns Condition (Parts Only)", "Pieces"]],
-      body: m.conditionRows.slice(0, 30).map(r => [r.status, String(r.pieces)]),
-      theme: "grid",
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [25, 40, 70] }
-    });
+    computeFromRows(state.rows);
+    applyManual();
+    const list = Array.from(state.byTracking.values());
 
-    // Manual counts (exports)
-    if (state.manualCounts.length) {
-      doc.autoTable({
-        startY: doc.lastAutoTable.finalY + 18,
-        head: [["Manual Counts", "Box/Tracking", "Label", "Pieces"]],
-        body: state.manualCounts.map(x => [fmtWhen(x.when), x.box || "", x.label, String(x.qty)]),
-        theme: "grid",
-        styles: { fontSize: 9 },
-        headStyles: { fillColor: [25, 40, 70] }
+    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
+    const uniqueTracking = list.length;
+    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
+    const multi = list.filter(x => x.partsPieces > 1).length;
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("RRPD Summary");
+
+    ws.addRow(["RRPD Receiving Summary"]);
+    ws.addRow([`Generated: ${new Date().toLocaleString()}`]);
+    ws.addRow([]);
+
+    ws.addRow(["Total Scans (tracking rows)", totalScans]);
+    ws.addRow(["Unique Tracking", uniqueTracking]);
+    ws.addRow(["Total Parts (pieces)", totalParts]);
+    ws.addRow(["Multi-Part Boxes", multi]);
+    ws.addRow([]);
+
+    ws.addRow(["Tracking", "Carrier", "Tracking Rows", "Pieces"]);
+    ws.lastRow.font = { bold: true };
+
+    for (const r of buildSummaryRows()) ws.addRow(r);
+    ws.columns.forEach(c => (c.width = 22));
+
+    const buf = await wb.xlsx.writeBuffer();
+    saveAs(
+      new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      `rrpd_summary_${new Date().toISOString().slice(0,10)}.xlsx`
+    );
+  }
+
+  function bindExport() {
+    $("btnExportSummary")?.addEventListener("click", showSummaryModal);
+    $("btnExportPDF")?.addEventListener("click", exportPDF);
+    $("btnExportExcel")?.addEventListener("click", exportExcel);
+    $("btnSaveLogs")?.addEventListener("click", () => setActiveTab("logs"));
+  }
+
+  // ----------------------------
+  // Init
+  // ----------------------------
+  document.addEventListener("DOMContentLoaded", () => {
+    try {
+      bindTabs();
+      bindModal();
+      bindCSV();
+      bindManual();
+      bindLogs();
+      bindExport();
+
+      renderAll();
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") hideSummaryModal();
       });
+    } catch (err) {
+      console.error("Init error:", err);
+      alert("RRPD page init error — open Console for details.");
     }
+  });
 
-    // Manifest (exports - only if small-ish)
-    if (state.manifest.headers.length && state.manifest.rows.length) {
-      const maxCols = Math.min(state.manifest.headers.length, 8);
-      const head = [state.manifest.headers.slice(0, maxCols)];
-      const body = state.manifest.rows.slice(0, 25).map(r => r.slice(0, maxCols));
-      doc.autoTable({
-        startY: doc.lastAutoTable.finalY + 18,
-        head,
-        body,
-        theme: "grid",
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [25, 40, 70] }
-      });
-      doc.setFontSize(9);
-      doc.text("(Manifest preview limited in PDF. Full manifest is in Excel.)", 40, doc.lastAutoTable.finalY + 14);
-    }
-
-    doc.save(safeFilename("RRPD_Summary", "pdf"));
-    STATUS.textContent = "PDF exported.";
-    closeModal();
-  }
-
-  // ---------- Manifest Export (CSV passthrough) ----------
-  function exportManifestCsv() {
-    if (!state.manifest.headers.length) {
-      alert("No manifest loaded.");
-      return;
-    }
-    const rows = [state.manifest.headers, ...state.manifest.rows];
-    const csv = Papa.unparse(rows);
-    saveAs(new Blob([csv], { type: "text/csv;charset=utf-8" }), safeFilename("Manifest", "csv"));
-    STATUS.textContent = "Manifest CSV exported.";
-  }
-
-  // ---------- Manual Counts ----------
-  function initManualCounts() {
-    $("#addManualBtn").addEventListener("click", () => {
-      const box = normStr($("#manualBoxId").value);
-      const label = normStr($("#manualLabel").value);
-      const qty = parseInt($("#manualQty").value, 10);
-
-      if (!label) return alert("Please enter a label.");
-      if (!Number.isFinite(qty) || qty <= 0) return alert("Please enter a valid pieces number.");
-
-      state.manualCounts.unshift({
-        id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
-        when: nowIso(),
-        box,
-        label,
-        qty
-      });
-
-      $("#manualBoxId").value = "";
-      $("#manualLabel").value = "";
-      $("#manualQty").value = "";
-
-      renderManual();
-      STATUS.textContent = "Manual count added.";
-    });
-
-    $("#manualTable").addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-remove-manual]");
-      if (!btn) return;
-      const id = btn.getAttribute("data-remove-manual");
-      state.manualCounts = state.manualCounts.filter(x => x.id !== id);
-      renderManual();
-      STATUS.textContent = "Manual count removed.";
-    });
-  }
-
-  // ---------- Init ----------
-  function initEvents() {
-    $("#whCsvInput").addEventListener("change", (e) => loadWhCsv(e.target.files?.[0]));
-    $("#manifestCsvInput").addEventListener("change", (e) => loadManifestCsv(e.target.files?.[0]));
-
-    $("#saveShows").addEventListener?.("click", () => {}); // (safe noop if older HTML)
-
-    $("#saveLogsBtn").addEventListener("click", () => {
-      addLogSnapshot();
-      renderLogsTable();
-    });
-
-    $("#clearLogsBtn").addEventListener("click", () => {
-      if (!confirm("Clear all logs?")) return;
-      saveLogs([]);
-      renderLogsTable();
-      STATUS.textContent = "Logs cleared.";
-    });
-
-    $("#logsTable").addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-remove-log]");
-      if (!btn) return;
-      const id = btn.getAttribute("data-remove-log");
-      const logs = loadLogs().filter(x => x.id !== id);
-      saveLogs(logs);
-      renderLogsTable();
-      STATUS.textContent = "Log removed.";
-    });
-
-    $("#exportPdfBtn").addEventListener("click", exportPdf);
-    $("#exportExcelBtn").addEventListener("click", exportExcel);
-
-    $("#exportManifestBtn").addEventListener("click", exportManifestCsv);
-    $("#clearManifestBtn").addEventListener("click", () => {
-      if (!confirm("Clear manifest?")) return;
-      state.manifest.headers = [];
-      state.manifest.rows = [];
-      renderManifest();
-      STATUS.textContent = "Manifest cleared.";
-    });
-  }
-
-  function init() {
-    initTabs();
-    initModal();
-    initManualCounts();
-    initEvents();
-    renderAll();
-    renderLogsTable();
-
-    // If assets fail to load (like logo), do not break app:
-    window.addEventListener("error", (e) => {
-      // Keep this quiet, but still show in console
-      console.warn("Asset/script error:", e?.message || e);
-    });
-  }
-
-  // Run after DOM is ready
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
 })();
