@@ -1,13 +1,7 @@
-/* RRPD Receiving Dashboard - FINAL (patched)
+/* RRPD Receiving Dashboard - FINAL (CLICK-SAFE v4)
    Tracking rows: ONLY classification Return Label / Packing Slip
    Parts: any other classification
    Quantity multiplier: xN / Nx / x N / N x (cap 50)
-
-   PATCHES:
-   - No manual double counting: renderAll() recomputes from scratch every time
-   - Logs snapshot recomputes safely (no mutation)
-   - Tracking fallback only runs on tracking rows (prevents part numbers turning into tracking IDs)
-   - Manual delete uses event delegation without {once:true}
 */
 
 (() => {
@@ -17,6 +11,13 @@
   // Utilities
   // ----------------------------
   const $ = (id) => document.getElementById(id);
+
+  function on(id, evt, fn, opts) {
+    const el = $(id);
+    if (!el) return false;
+    el.addEventListener(evt, fn, opts);
+    return true;
+  }
 
   function setText(id, val) {
     const el = $(id);
@@ -36,32 +37,23 @@
     return /^[0-9]+(\.[0-9]+)?e\+?[0-9]+$/i.test(str.trim());
   }
 
-  // Convert "1.96367E+11" into a plain integer string (best effort)
   function sciToPlainString(s) {
     const t = asString(s);
     if (!t) return "";
     if (!looksLikeScientific(t)) return t;
-
-    // WARNING: JS Number can lose precision if value is too large.
-    // These Excel sci values in your screenshots were ~1e11, so safe enough here.
     const n = Number(t);
     if (!Number.isFinite(n)) return t;
     return Math.round(n).toString();
   }
 
-  // Robust multiplier parsing: "x10", "10x", "x 10", "10 x", "*10"
-  // returns { basePart, qty }
   function parsePartAndQty(partRaw) {
     let part = asString(partRaw);
     if (!part) return { basePart: "", qty: 1 };
 
     let qty = 1;
     const cap = 50;
-
-    // normalize spaces
     let s = part.replace(/\s+/g, " ").trim();
 
-    // capture any multiplier near end
     const m1 = s.match(/(?:^|[\s\-])x\s*(\d{1,3})\s*$/i);
     const m2 = s.match(/(?:^|[\s\-])(\d{1,3})\s*x\s*$/i);
     const m3 = s.match(/(?:^|[\s\-])\*\s*(\d{1,3})\s*$/i);
@@ -75,7 +67,6 @@
       const n = parseInt(found, 10);
       if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
 
-      // remove trailing multiplier token
       s = s
         .replace(/(?:^|[\s\-])x\s*\d{1,3}\s*$/i, "")
         .replace(/(?:^|[\s\-])\d{1,3}\s*x\s*$/i, "")
@@ -83,7 +74,6 @@
         .trim();
     }
 
-    // handle "PARTx2" stuck with no space
     const stuck = s.match(/^(.*?)(?:x|\*)(\d{1,3})$/i);
     if (stuck) {
       const n = parseInt(stuck[2], 10);
@@ -98,14 +88,9 @@
     const tracking = asString(trackingRaw);
     if (!tracking) return "Other";
 
-    // UPS: 1Z...
     if (/^1Z/i.test(tracking)) return "UPS";
-
-    // USPS common: 92/93/94/95 + 20-22 digits, or 22 digits starting with 9
     if (/^(92|93|94|95)\d{20,22}$/.test(tracking)) return "USPS";
     if (/^9\d{21,22}$/.test(tracking)) return "USPS";
-
-    // FedEx heuristics:
     if (/^\d{12,15}$/.test(tracking)) return "FedEx";
     if (/^\d{20,22}$/.test(tracking)) return "FedEx";
 
@@ -124,7 +109,6 @@
         if (v) return v;
       }
     }
-    // case-insensitive match
     const rowKeys = Object.keys(row || {});
     const lowered = rowKeys.map((x) => [x, x.toLowerCase()]);
     for (const want of keys) {
@@ -143,15 +127,16 @@
   // ----------------------------
   const state = {
     rows: [],
-    byTracking: new Map(), // tracking -> aggregate object
-    looseParts: [],        // part rows without valid tracking
-    manual: [],            // manual entries
+    byTracking: new Map(),
+    looseParts: [],
+    manualCounts: [],     // { item, qty, carrier }
     logs: [],
-    chart: null
+    carrierChart: null,
+    returnsChart: null
   };
 
   // ----------------------------
-  // Parsing + Aggregation
+  // Compute
   // ----------------------------
   function resetComputed() {
     state.byTracking.clear();
@@ -166,8 +151,7 @@
         trackingRows: 0,
         partsPieces: 0,
         partRows: 0,
-        parts: [],        // {part, qty, status}
-        classifications: new Map()
+        parts: [], // {part, qty, status}
       });
     }
     return state.byTracking.get(tracking);
@@ -176,22 +160,11 @@
   function computeFromRows(rows) {
     resetComputed();
 
-    const classificationKeys = [
-      "Classification", "classification", "Type", "type", "Category", "category"
-    ];
-
-    const trackingKeys = [
-      "Tracking", "tracking", "Tracking Number", "tracking number",
-      "TrackingNumber", "trackingNumber",
-      "Return Tracking", "return tracking"
-    ];
-
-    const partKeys = [
-      "Deposo PN", "DeposoPN", "Part", "Part Number", "PartNumber", "part", "part number"
-    ];
-
-    const statusKeys = ["Status", "status", "Condition", "condition"];
-    const qtyKeys = ["Qty", "qty", "Quantity", "quantity", "Pieces", "pieces"];
+    const classificationKeys = ["Classification","classification","Type","type","Category","category"];
+    const trackingKeys = ["Tracking","tracking","Tracking Number","tracking number","TrackingNumber","trackingNumber","Return Tracking","return tracking"];
+    const partKeys = ["Deposo PN","DeposoPN","Part","Part Number","PartNumber","part","part number"];
+    const statusKeys = ["Status","status","Condition","condition"];
+    const qtyKeys = ["Qty","qty","Quantity","quantity","Pieces","pieces"];
 
     for (const row of rows) {
       const classification = pickField(row, classificationKeys);
@@ -199,32 +172,24 @@
 
       let tracking = pickField(row, trackingKeys);
 
-      // IMPORTANT PATCH:
-      // Only guess tracking from random cells IF it's a tracking row.
-      if (!tracking && isTrackingRow) {
+      if (!tracking) {
         const values = Object.values(row || {}).map(asString).filter(Boolean);
         const candidate = values.find(v =>
           /^1Z/i.test(v) || /^\d{12,22}$/.test(v) || looksLikeScientific(v)
         );
-        tracking = candidate ? candidate : "";
+        tracking = candidate || "";
       }
 
       tracking = sciToPlainString(tracking);
-
       const status = pickField(row, statusKeys);
 
-      // PART row logic
       if (!isTrackingRow) {
         let partRaw = pickField(row, partKeys);
 
-        // fallback: pick first non-tracking-like value
         if (!partRaw) {
           const values = Object.values(row || {}).map(asString).filter(Boolean);
-          partRaw = values.find(v =>
-            !/^1Z/i.test(v) &&
-            !/^\d{12,22}$/.test(v) &&
-            !looksLikeScientific(v)
-          ) || "";
+          partRaw =
+            values.find(v => !/^1Z/i.test(v) && !/^\d{12,22}$/.test(v) && !looksLikeScientific(v)) || "";
         }
 
         const qtyFromColumnRaw = pickField(row, qtyKeys);
@@ -246,119 +211,98 @@
           agg.partsPieces += qty;
           agg.parts.push(partObj);
         } else {
-          state.looseParts.push({ ...partObj, rawTracking: tracking || "" });
+          state.looseParts.push({ ...partObj, rawTracking: "" });
         }
-
       } else {
-        // TRACKING row logic
         if (!tracking) continue;
         const agg = upsertAgg(tracking);
         agg.trackingRows += 1;
-
-        const c = safeLower(classification) || "(blank)";
-        agg.classifications.set(c, (agg.classifications.get(c) || 0) + 1);
       }
     }
   }
 
-  function applyManual() {
-    for (const m of state.manual) {
-      const tracking = asString(m.tracking);
-      if (!tracking) continue;
-      const agg = upsertAgg(tracking);
-      agg.carrier = m.carrier || agg.carrier;
-      agg.partsPieces += m.pieces;
-    }
+  function manualTotalQty() {
+    return state.manualCounts.reduce((a, x) => a + (x.qty || 0), 0);
   }
 
   // ----------------------------
-  // Rendering
+  // Charts (never allowed to break the page)
   // ----------------------------
-  function updateChart(counts) {
+  function safeChartDestroy(chart) {
+    try { chart?.destroy?.(); } catch {}
+  }
+
+  function updateCarrierChart(counts) {
     const canvas = $("carrierChart");
-    if (!canvas) return;
+    if (!canvas || !window.Chart) return;
 
     const labels = ["FedEx", "UPS", "USPS", "Other"];
     const data = [counts.FedEx, counts.UPS, counts.USPS, counts.Other];
 
-    if (state.chart) {
-      state.chart.data.labels = labels;
-      state.chart.data.datasets[0].data = data;
-      state.chart.update();
-      return;
-    }
-
-    state.chart = new Chart(canvas, {
-      type: "bar",
-      data: {
-        labels,
-        datasets: [{
-          label: "Tracking Rows",
-          data
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
+    try {
+      if (state.carrierChart) {
+        state.carrierChart.data.labels = labels;
+        state.carrierChart.data.datasets[0].data = data;
+        state.carrierChart.update();
+        return;
       }
-    });
+
+      state.carrierChart = new Chart(canvas, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Tracking Rows", data }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+      });
+    } catch (e) {
+      console.error("Carrier chart error:", e);
+      safeChartDestroy(state.carrierChart);
+      state.carrierChart = null;
+    }
   }
 
-  function renderManualTable() {
-    const body = $("tblManual")?.querySelector("tbody");
-    if (!body) return;
+  function updateReturnsChart(statusPairs) {
+    const canvas = $("returnsChart");
+    if (!canvas || !window.Chart) return;
 
-    body.innerHTML = "";
-    state.manual.forEach((m, idx) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${m.tracking}</td>
-        <td>${m.carrier}</td>
-        <td>${m.pieces}</td>
-        <td><button class="btn danger" data-del="${idx}">Delete</button></td>
-      `;
-      body.appendChild(tr);
-    });
+    const top = statusPairs.slice(0, 8);
+    const labels = top.map(x => x[0]);
+    const data = top.map(x => x[1].pieces);
+
+    try {
+      if (state.returnsChart) {
+        state.returnsChart.data.labels = labels;
+        state.returnsChart.data.datasets[0].data = data;
+        state.returnsChart.update();
+        return;
+      }
+
+      state.returnsChart = new Chart(canvas, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Pieces", data }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+      });
+    } catch (e) {
+      console.error("Returns chart error:", e);
+      safeChartDestroy(state.returnsChart);
+      state.returnsChart = null;
+    }
   }
 
-  function renderLogsTable() {
-    const body = $("tblLogs")?.querySelector("tbody");
-    if (!body) return;
-
-    body.innerHTML = "";
-    state.logs.forEach((l, idx) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${l.when}</td>
-        <td>${l.note || ""}</td>
-        <td>${l.totalParts}</td>
-        <td>${l.uniqueTracking}</td>
-        <td><button class="btn danger" data-del="${idx}">Delete</button></td>
-      `;
-      body.appendChild(tr);
-    });
-  }
-
+  // ----------------------------
+  // Render
+  // ----------------------------
   function renderAll() {
-    // ✅ CRITICAL PATCH: always recompute cleanly
-    computeFromRows(state.rows);
-    applyManual();
+    const list = Array.from(state.byTracking.values());
 
     let counts = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
     let totalScans = 0;
-    let uniqueTracking = 0;
+    let uniqueTracking = list.length;
     let totalParts = 0;
     let multiPartBoxes = 0;
 
-    const list = Array.from(state.byTracking.values());
-
     for (const agg of list) {
-      uniqueTracking += 1;
       totalScans += agg.trackingRows;
       totalParts += agg.partsPieces;
       if (agg.partsPieces > 1) multiPartBoxes += 1;
-
       counts[agg.carrier] = (counts[agg.carrier] || 0) + agg.trackingRows;
     }
 
@@ -371,14 +315,14 @@
     setText("mTotalParts", totalParts);
     setText("mMultiPartBoxes", multiPartBoxes);
 
-    updateChart({
+    updateCarrierChart({
       FedEx: counts.FedEx || 0,
       UPS: counts.UPS || 0,
       USPS: counts.USPS || 0,
       Other: counts.Other || 0
     });
 
-    // samples latest 25
+    // samples
     const samplesBody = $("tblSamples")?.querySelector("tbody");
     if (samplesBody) {
       samplesBody.innerHTML = "";
@@ -390,13 +334,13 @@
       });
     }
 
-    // repeated tracking
+    // repeated
     const repBody = $("tblRepeated")?.querySelector("tbody");
     if (repBody) {
       repBody.innerHTML = "";
       const repeated = list
         .filter(a => a.trackingRows > 1)
-        .sort((a, b) => b.trackingRows - a.trackingRows)
+        .sort((a,b) => b.trackingRows - a.trackingRows)
         .slice(0, 25);
 
       repeated.forEach((agg) => {
@@ -410,42 +354,44 @@
     const carriersBody = $("tblCarriers")?.querySelector("tbody");
     if (carriersBody) {
       carriersBody.innerHTML = "";
-      ["FedEx", "UPS", "USPS", "Other"].forEach((c) => {
+      ["FedEx","UPS","USPS","Other"].forEach((c) => {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${c}</td><td>${counts[c] || 0}</td>`;
         carriersBody.appendChild(tr);
       });
     }
 
-    // returns condition summary
+    // returns condition
     const returnsBody = $("tblReturns")?.querySelector("tbody");
+    const statusMap = new Map(); // status -> {rows, pieces}
+    for (const agg of list) {
+      for (const p of agg.parts) {
+        const key = asString(p.status) || "(blank)";
+        if (!statusMap.has(key)) statusMap.set(key, { rows: 0, pieces: 0 });
+        const obj = statusMap.get(key);
+        obj.rows += 1;
+        obj.pieces += (p.qty || 1);
+      }
+    }
+    const statusPairs = Array.from(statusMap.entries())
+      .sort((a,b) => b[1].pieces - a[1].pieces);
+
     if (returnsBody) {
       returnsBody.innerHTML = "";
-      const statusMap = new Map(); // status -> {rows, pieces}
-
-      for (const agg of list) {
-        for (const p of agg.parts) {
-          const key = asString(p.status) || "(blank)";
-          if (!statusMap.has(key)) statusMap.set(key, { rows: 0, pieces: 0 });
-          const obj = statusMap.get(key);
-          obj.rows += 1;
-          obj.pieces += (p.qty || 1);
-        }
-      }
-
-      const sorted = Array.from(statusMap.entries()).sort((a, b) => b[1].pieces - a[1].pieces);
-      sorted.forEach(([status, v]) => {
+      statusPairs.forEach(([status, v]) => {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${status}</td><td>${v.rows}</td><td>${v.pieces}</td>`;
         returnsBody.appendChild(tr);
       });
     }
 
+    updateReturnsChart(statusPairs);
+
     // manifest
     const manBody = $("tblManifest")?.querySelector("tbody");
     if (manBody) {
       manBody.innerHTML = "";
-      const sorted = list.slice().sort((a, b) => b.partsPieces - a.partsPieces);
+      const sorted = list.slice().sort((a,b) => b.partsPieces - a.partsPieces);
       sorted.forEach((agg) => {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${agg.tracking}</td><td>${agg.carrier}</td><td>${agg.trackingRows}</td><td>${agg.partsPieces}</td>`;
@@ -453,7 +399,7 @@
       });
     }
 
-    // loose parts
+    // loose
     const looseBody = $("tblLoose")?.querySelector("tbody");
     if (looseBody) {
       looseBody.innerHTML = "";
@@ -464,20 +410,24 @@
       });
     }
 
+    // manual table
     renderManualTable();
-    renderLogsTable();
 
+    // modal preview numbers
     setText("pTotalScans", totalScans);
     setText("pUnique", uniqueTracking);
     setText("pParts", totalParts);
     setText("pMulti", multiPartBoxes);
 
+    // status line
     const statusLine = $("statusLine");
     if (statusLine) {
-      statusLine.textContent =
-        uniqueTracking === 0 && state.rows.length === 0 && state.manual.length === 0
+      const manQty = manualTotalQty();
+      const base =
+        uniqueTracking === 0 && state.rows.length === 0 && state.manualCounts.length === 0
           ? "No WH CSV loaded."
-          : `Loaded ${state.rows.length} CSV rows. Unique tracking: ${uniqueTracking}. Total parts (pieces): ${totalParts}.`;
+          : `Loaded ${state.rows.length} CSV rows. Unique tracking: ${uniqueTracking}. Total parts (pieces): ${totalParts}. Manual qty: ${manQty}.`;
+      statusLine.textContent = base;
     }
   }
 
@@ -519,17 +469,14 @@
   }
 
   function hideSummaryModal() {
-    const modal = $("modalSummary");
-    const backdrop = $("modalBackdrop");
-    if (!modal || !backdrop) return;
-    modal.classList.add("hidden");
-    backdrop.classList.add("hidden");
+    $("modalSummary")?.classList.add("hidden");
+    $("modalBackdrop")?.classList.add("hidden");
   }
 
   function bindModal() {
-    $("modalBackdrop")?.addEventListener("click", hideSummaryModal);
-    $("btnModalX")?.addEventListener("click", hideSummaryModal);
-    $("btnModalCancel")?.addEventListener("click", hideSummaryModal);
+    on("modalBackdrop", "click", hideSummaryModal);
+    on("btnModalX", "click", hideSummaryModal);
+    on("btnModalCancel", "click", hideSummaryModal);
   }
 
   // ----------------------------
@@ -542,6 +489,11 @@
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (!file) return;
+
+      if (!window.Papa) {
+        alert("PapaParse failed to load. Check internet/CDN.");
+        return;
+      }
 
       Papa.parse(file, {
         header: true,
@@ -560,29 +512,51 @@
   }
 
   // ----------------------------
-  // Manual
+  // Manual Counts (FIXED delete works now)
   // ----------------------------
+  function renderManualTable() {
+    const body = $("tblManual")?.querySelector("tbody");
+    if (!body) return;
+
+    body.innerHTML = "";
+    state.manualCounts.forEach((m, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${m.item}</td>
+        <td>${m.qty}</td>
+        <td>${m.carrier}</td>
+        <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
+      `;
+      body.appendChild(tr);
+    });
+  }
+
   function bindManual() {
-    $("btnManualAdd")?.addEventListener("click", () => {
-      const tracking = asString($("manTracking")?.value);
-      const carrier = asString($("manCarrier")?.value) || "Other";
-      const piecesRaw = asString($("manPieces")?.value);
+    on("btnManualAdd", "click", () => {
+      const item = asString($("manItem")?.value);
+      const qtyRaw = asString($("manQty")?.value);
+      const carrier = asString($("manCarrier")?.value) || "All";
 
-      const pieces = parseInt(piecesRaw.replace(/[^\d]/g, ""), 10);
-      if (!tracking) return alert("Enter Tracking ID.");
-      if (!Number.isFinite(pieces) || pieces <= 0) return alert("Enter a valid pieces number.");
+      const qty = parseInt(qtyRaw.replace(/[^\d]/g, ""), 10);
+      if (!item) return alert("Enter an item (ex: Racks, Axles).");
+      if (!Number.isFinite(qty) || qty <= 0) return alert("Enter a valid qty.");
 
-      state.manual.push({ tracking, carrier, pieces: Math.min(pieces, 999999) });
+      state.manualCounts.unshift({ item, qty, carrier });
+
+      if ($("manItem")) $("manItem").value = "";
+      if ($("manQty")) $("manQty").value = "";
+      if ($("manCarrier")) $("manCarrier").value = "All";
+
       renderAll();
     });
 
-    $("btnManualClear")?.addEventListener("click", () => {
-      if ($("manTracking")) $("manTracking").value = "";
-      if ($("manPieces")) $("manPieces").value = "";
-      if ($("manCarrier")) $("manCarrier").value = "FedEx";
+    on("btnManualClear", "click", () => {
+      if ($("manItem")) $("manItem").value = "";
+      if ($("manQty")) $("manQty").value = "";
+      if ($("manCarrier")) $("manCarrier").value = "All";
     });
 
-    // event delegation for delete
+    // ✅ Delete handler (delegated) — this was missing in your version
     const body = $("tblManual")?.querySelector("tbody");
     if (body) {
       body.addEventListener("click", (e) => {
@@ -590,16 +564,16 @@
         if (!btn) return;
         const i = parseInt(btn.dataset.del, 10);
         if (!Number.isFinite(i)) return;
-        state.manual.splice(i, 1);
+        state.manualCounts.splice(i, 1);
         renderAll();
       });
     }
   }
 
   // ----------------------------
-  // Logs
+  // Logs (localStorage)
   // ----------------------------
-  const LOG_KEY = "rrpd_logs_v2";
+  const LOG_KEY = "rrpd_logs_final_v4";
 
   function loadLogs() {
     try {
@@ -613,20 +587,49 @@
   }
 
   function saveLogs() {
-    localStorage.setItem(LOG_KEY, JSON.stringify(state.logs));
+    try {
+      localStorage.setItem(LOG_KEY, JSON.stringify(state.logs));
+    } catch (e) {
+      console.error("localStorage save failed:", e);
+      alert("Saving logs failed (storage blocked/full).");
+    }
+  }
+
+  function renderLogsTable() {
+    const body = $("tblLogs")?.querySelector("tbody");
+    if (!body) return;
+
+    body.innerHTML = "";
+    state.logs.forEach((l, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${l.when}</td>
+        <td>${l.note || ""}</td>
+        <td>${l.totalParts}</td>
+        <td>${l.uniqueTracking}</td>
+        <td>${l.manualQty}</td>
+        <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
+      `;
+      body.appendChild(tr);
+    });
   }
 
   function exportLogsCSV() {
-    const header = ["when", "note", "totalParts", "uniqueTracking", "totalScans"];
-    const lines = [header.join(",")];
+    if (!window.saveAs) {
+      alert("FileSaver failed to load. Check internet/CDN.");
+      return;
+    }
 
+    const header = ["when","note","totalParts","uniqueTracking","totalScans","manualQty"];
+    const lines = [header.join(",")];
     for (const l of state.logs) {
       lines.push([
         l.when,
         `"${(l.note || "").replace(/"/g, '""')}"`,
         l.totalParts,
         l.uniqueTracking,
-        l.totalScans
+        l.totalScans,
+        l.manualQty
       ].join(","));
     }
 
@@ -638,31 +641,29 @@
     state.logs = loadLogs();
     renderLogsTable();
 
-    $("btnLogAdd")?.addEventListener("click", () => {
-      // safe snapshot
-      computeFromRows(state.rows);
-      applyManual();
+    on("btnLogAdd", "click", () => {
       const list = Array.from(state.byTracking.values());
-
       const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
       const uniqueTracking = list.length;
       const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
+      const manualQty = manualTotalQty();
 
       state.logs.unshift({
         when: new Date().toLocaleString(),
         note: asString($("logNote")?.value),
         totalParts,
         uniqueTracking,
-        totalScans
+        totalScans,
+        manualQty
       });
 
       saveLogs();
       renderLogsTable();
     });
 
-    $("btnLogExport")?.addEventListener("click", exportLogsCSV);
+    on("btnLogExport", "click", exportLogsCSV);
 
-    $("btnLogClearAll")?.addEventListener("click", () => {
+    on("btnLogClearAll", "click", () => {
       if (!confirm("Delete all logs?")) return;
       state.logs = [];
       saveLogs();
@@ -699,87 +700,120 @@
     const list = Array.from(state.byTracking.values());
     return list
       .slice()
-      .sort((a, b) => b.partsPieces - a.partsPieces)
+      .sort((a,b) => b.partsPieces - a.partsPieces)
       .map(a => [a.tracking, a.carrier, a.trackingRows, a.partsPieces]);
+  }
+
+  function buildManualRows() {
+    return state.manualCounts.map(m => [m.item, m.qty, m.carrier]);
   }
 
   function exportPDF() {
     if (!requireConfirm()) return;
-
-    computeFromRows(state.rows);
-    applyManual();
-    const list = Array.from(state.byTracking.values());
-
-    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
-    const uniqueTracking = list.length;
-    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
-    const multi = list.filter(x => x.partsPieces > 1).length;
+    if (!window.jspdf?.jsPDF) {
+      alert("jsPDF failed to load. Check internet/CDN.");
+      return;
+    }
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
+    const list = Array.from(state.byTracking.values());
+    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
+    const uniqueTracking = list.length;
+    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
+    const multi = list.filter(x => x.partsPieces > 1).length;
+    const manualQty = manualTotalQty();
+
     doc.setFontSize(16);
     doc.text("RRPD Receiving Summary", 40, 50);
+
     doc.setFontSize(11);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 70);
     doc.text(`Total Scans (tracking rows): ${totalScans}`, 40, 88);
     doc.text(`Unique Tracking: ${uniqueTracking}`, 40, 104);
     doc.text(`Total Parts (pieces): ${totalParts}`, 40, 120);
     doc.text(`Multi-Part Boxes: ${multi}`, 40, 136);
+    doc.text(`Manual Qty (racks/axles/etc): ${manualQty}`, 40, 152);
 
     doc.autoTable({
-      startY: 160,
+      startY: 175,
       head: [["Tracking", "Carrier", "Tracking Rows", "Pieces"]],
       body: buildSummaryRows(),
       styles: { fontSize: 9 }
     });
 
+    const after = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 18 : 520;
+
+    const manual = buildManualRows();
+    if (manual.length) {
+      doc.text("Manual Counts", 40, after);
+      doc.autoTable({
+        startY: after + 10,
+        head: [["Item", "Qty", "Carrier"]],
+        body: manual,
+        styles: { fontSize: 9 }
+      });
+    }
+
     doc.save(`rrpd_summary_${new Date().toISOString().slice(0,10)}.pdf`);
+    hideSummaryModal(); // ✅ close modal after export
   }
 
   async function exportExcel() {
     if (!requireConfirm()) return;
+    if (!window.ExcelJS || !window.saveAs) {
+      alert("ExcelJS or FileSaver failed to load. Check internet/CDN.");
+      return;
+    }
 
-    computeFromRows(state.rows);
-    applyManual();
+    const wb = new ExcelJS.Workbook();
+
     const list = Array.from(state.byTracking.values());
-
     const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
     const uniqueTracking = list.length;
     const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
     const multi = list.filter(x => x.partsPieces > 1).length;
+    const manualQty = manualTotalQty();
 
-    const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("RRPD Summary");
-
     ws.addRow(["RRPD Receiving Summary"]);
     ws.addRow([`Generated: ${new Date().toLocaleString()}`]);
     ws.addRow([]);
-
     ws.addRow(["Total Scans (tracking rows)", totalScans]);
     ws.addRow(["Unique Tracking", uniqueTracking]);
     ws.addRow(["Total Parts (pieces)", totalParts]);
     ws.addRow(["Multi-Part Boxes", multi]);
+    ws.addRow(["Manual Qty (racks/axles/etc)", manualQty]);
     ws.addRow([]);
 
-    ws.addRow(["Tracking", "Carrier", "Tracking Rows", "Pieces"]);
-    ws.lastRow.font = { bold: true };
+    const header = ws.addRow(["Tracking", "Carrier", "Tracking Rows", "Pieces"]);
+    header.font = { bold: true };
 
     for (const r of buildSummaryRows()) ws.addRow(r);
-    ws.columns.forEach(c => (c.width = 22));
+    ws.columns.forEach(c => (c.width = 24));
+
+    const ws2 = wb.addWorksheet("Manual Counts");
+    const header2 = ws2.addRow(["Item", "Qty", "Carrier"]);
+    header2.font = { bold: true };
+    for (const r of buildManualRows()) ws2.addRow(r);
+    ws2.columns.forEach(c => (c.width = 26));
 
     const buf = await wb.xlsx.writeBuffer();
     saveAs(
       new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
       `rrpd_summary_${new Date().toISOString().slice(0,10)}.xlsx`
     );
+
+    hideSummaryModal(); // ✅ close modal after export
   }
 
   function bindExport() {
-    $("btnExportSummary")?.addEventListener("click", showSummaryModal);
-    $("btnExportPDF")?.addEventListener("click", exportPDF);
-    $("btnExportExcel")?.addEventListener("click", exportExcel);
-    $("btnSaveLogs")?.addEventListener("click", () => setActiveTab("logs"));
+    on("btnExportSummary", "click", showSummaryModal);
+    on("btnExportPDF", "click", exportPDF);
+    on("btnExportExcel", "click", exportExcel);
+
+    on("btnSaveLogs", "click", () => setActiveTab("logs"));
   }
 
   // ----------------------------
@@ -794,6 +828,7 @@
       bindLogs();
       bindExport();
 
+      computeFromRows([]);
       renderAll();
 
       document.addEventListener("keydown", (e) => {
@@ -801,8 +836,7 @@
       });
     } catch (err) {
       console.error("Init error:", err);
-      alert("RRPD page init error — open Console for details.");
+      alert("RRPD init error — open Console for details.");
     }
   });
-
 })();
