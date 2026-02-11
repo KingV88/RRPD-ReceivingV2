@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>RRPD Receiving Dashboard</title>
 
-  <!-- IMPORTANT: file is style.css (NOT styles.css) to avoid 404 -->
+  <!-- Use ONE stylesheet to avoid override bugs -->
   <link rel="stylesheet" href="style.css" />
+
+  <!-- icon (optional) -->
+  <link rel="icon" href="detroit-axle-logo.png" type="image/png" />
 
   <!-- CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -26,7 +29,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="logo" src="detroit-axle-logo.png" alt="Detroit Axle logo" />
+      <img class="logo" src="detroit-axle-logo.png" alt="Detroit Axle" />
       <div>
         <div class="title">RRPD Receiving Dashboard</div>
         <div class="subtitle">WH Returns + Manifest + Loose Parts + Logs</div>
@@ -34,100 +37,73 @@
     </div>
 
     <div class="top-actions">
-      <label class="file-btn">
-        <input id="whCsvInput" type="file" accept=".csv,text/csv" />
-        Upload WH CSV
+      <label class="file-btn" title="Upload WH CSV">
+        <span>Upload WH CSV</span>
+        <input id="csvFile" type="file" accept=".csv" />
       </label>
 
-      <button id="saveLogsBtn" class="btn">Save to Logs</button>
-      <button id="exportSummaryBtn" class="btn primary">Export RRPD Summary</button>
+      <button id="btnSaveLogs" class="btn" type="button">Save to Logs</button>
+      <button id="btnExportSummary" class="btn primary" type="button">Export RRPD Summary</button>
     </div>
   </header>
 
   <main class="shell">
-    <nav class="tabs" role="tablist" aria-label="RRPD panels">
-      <button class="tab active" data-tab="dashboard">Dashboard</button>
-      <button class="tab" data-tab="carriers">Carriers</button>
-      <button class="tab" data-tab="returns">Returns Condition</button>
-      <button class="tab" data-tab="manual">Manual Counts</button>
-      <button class="tab" data-tab="manifest">Manifest</button>
-      <button class="tab" data-tab="loose">Loose Parts</button>
-      <button class="tab" data-tab="logs">Logs</button>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="dashboard" type="button">Dashboard</button>
+      <button class="tab" data-tab="carriers" type="button">Carriers</button>
+      <button class="tab" data-tab="returns" type="button">Returns Condition</button>
+      <button class="tab" data-tab="manual" type="button">Manual Counts</button>
+      <button class="tab" data-tab="manifest" type="button">Manifest</button>
+      <button class="tab" data-tab="loose" type="button">Loose Parts</button>
+      <button class="tab" data-tab="logs" type="button">Logs</button>
     </nav>
 
     <!-- DASHBOARD -->
-    <section id="panel-dashboard" class="panel active">
+    <section class="panel active" id="panel-dashboard">
       <div class="rules">
-        <strong>Rules:</strong>
-        Tracking rows are ONLY <span class="pill">Return Label</span> / <span class="pill">Packing Slip</span>.
-        Parts are ANY other classification. Part quantities use x2/2x/etc (cap 50).
+        <b>Rules:</b>
+        Tracking rows are <span class="pill">ONLY</span> classification <b>Return Label</b> or <b>Packing Slip</b>.
+        Parts are <span class="pill">ANY</span> other classification.
+        Box pieces use multipliers <b>x2</b>/<b>2x</b> etc (cap <b>50</b>).
+        <div class="hint">Goal: show <b>how many parts (pieces)</b> are in the box, excluding return label / packing slip rows.</div>
       </div>
 
       <div class="grid">
-        <div class="card">
-          <div class="card-label">FedEx (tracking rows)</div>
-          <div id="kpiFedex" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">UPS (tracking rows)</div>
-          <div id="kpiUps" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">USPS (tracking rows)</div>
-          <div id="kpiUsps" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">Other (tracking rows)</div>
-          <div id="kpiOther" class="card-value">0</div>
-        </div>
+        <div class="card"><div class="card-label">FedEx (tracking rows)</div><div class="card-value" id="mFedEx">0</div></div>
+        <div class="card"><div class="card-label">UPS (tracking rows)</div><div class="card-value" id="mUPS">0</div></div>
+        <div class="card"><div class="card-label">USPS (tracking rows)</div><div class="card-value" id="mUSPS">0</div></div>
+        <div class="card"><div class="card-label">Other (tracking rows)</div><div class="card-value" id="mOther">0</div></div>
 
-        <div class="card">
-          <div class="card-label">Total Tracking Scans (rows)</div>
-          <div id="kpiTrackingRows" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">Unique Tracking Numbers</div>
-          <div id="kpiUniqueTracking" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">Total Parts (pieces)</div>
-          <div id="kpiTotalParts" class="card-value">0</div>
-        </div>
-        <div class="card">
-          <div class="card-label">Multi-Part Boxes</div>
-          <div id="kpiMultiPartBoxes" class="card-value">0</div>
-        </div>
+        <div class="card"><div class="card-label">Total Scans (tracking rows)</div><div class="card-value" id="mTotalScans">0</div></div>
+        <div class="card"><div class="card-label">Unique Tracking Numbers</div><div class="card-value" id="mUniqueTracking">0</div></div>
+        <div class="card"><div class="card-label">Total Parts (pieces)</div><div class="card-value" id="mTotalParts">0</div></div>
+        <div class="card"><div class="card-label">Multi-Part Boxes</div><div class="card-value" id="mMultiPartBoxes">0</div></div>
       </div>
 
       <div class="two-col">
         <div class="card block">
-          <div class="card-label">Carrier Scans (Tracking Rows)</div>
+          <div class="card-label">Carrier Scans (Bar)</div>
           <canvas id="carrierChart" height="120"></canvas>
-          <div class="hint">Bar chart counts tracking rows by carrier.</div>
+          <div class="hint">Counts are tracking rows per carrier (Return Label / Packing Slip rows only).</div>
         </div>
 
         <div class="card block">
-          <div class="card-label">Repeated Tracking Numbers (Top)</div>
-          <div class="hint">Tracking IDs that appear more than once (tracking rows only).</div>
+          <div class="card-label">Tracking Samples (Latest 25)</div>
           <div class="table-wrap">
-            <table class="table" id="repeatedTable">
-              <thead>
-                <tr><th>Tracking</th><th>Scans</th><th>Carrier</th></tr>
-              </thead>
+            <table class="table" id="tblSamples">
+              <thead><tr><th>#</th><th>Tracking</th><th>Carrier</th><th>Parts (pieces)</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
+          <div class="hint">Unique tracking IDs, newest first, with computed part pieces.</div>
         </div>
       </div>
 
       <div class="card block">
-        <div class="card-label">Tracking Samples (Latest 25)</div>
-        <div class="hint">On-screen verification only. (Tracking rows only.)</div>
+        <div class="card-label">Repeated Tracking Numbers (Top)</div>
         <div class="table-wrap">
-          <table class="table" id="sampleTable">
-            <thead>
-              <tr><th>Tracking</th><th>Carrier</th><th>Classification</th></tr>
-            </thead>
+          <table class="table" id="tblRepeated">
+            <thead><tr><th>Tracking</th><th>Scans</th><th>Carrier</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -135,14 +111,13 @@
     </section>
 
     <!-- CARRIERS -->
-    <section id="panel-carriers" class="panel">
-      <div class="card block">
-        <div class="card-label">Carrier Breakdown (Tracking Rows)</div>
+    <section class="panel" id="panel-carriers">
+      <div class="card">
+        <div class="card-label">Carrier Breakdown</div>
+        <div class="hint">Tracking row counts by carrier (Return Label / Packing Slip only).</div>
         <div class="table-wrap">
-          <table class="table" id="carrierTable">
-            <thead>
-              <tr><th>Carrier</th><th>Tracking Rows</th><th>Unique Trackings</th></tr>
-            </thead>
+          <table class="table" id="tblCarriers">
+            <thead><tr><th>Carrier</th><th>Tracking Rows</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -150,39 +125,50 @@
     </section>
 
     <!-- RETURNS CONDITION -->
-    <section id="panel-returns" class="panel">
-      <div class="card block">
-        <div class="card-label">Returns Condition (Parts Only)</div>
-        <div class="hint">Counts are in <b>pieces</b>, not rows.</div>
-        <div class="table-wrap">
-          <table class="table" id="conditionTable">
-            <thead>
-              <tr><th>Status / Condition</th><th>Pieces</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+    <section class="panel" id="panel-returns">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-label">Returns Condition Summary</div>
+          <div class="hint">Counts are from PART rows only (everything except Return Label / Packing Slip).</div>
+          <div class="table-wrap">
+            <table class="table" id="tblReturns">
+              <thead><tr><th>Status</th><th>Part Rows</th><th>Pieces</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Returns Condition (Bar)</div>
+          <canvas id="returnsChart" height="140"></canvas>
+          <div class="hint">Top 8 statuses by pieces.</div>
         </div>
       </div>
     </section>
 
-    <!-- MANUAL COUNTS -->
-    <section id="panel-manual" class="panel">
-      <div class="card block">
-        <div class="card-label">Manual Counts</div>
-        <div class="hint">Use this if the CSV is missing something you physically counted. (These DO export.)</div>
+    <!-- MANUAL -->
+    <section class="panel" id="panel-manual">
+      <div class="card">
+        <div class="card-label">Manual Counts (Racks / Axles / etc)</div>
+        <div class="hint">Use this if you’re counting items manually. This does NOT separate by carrier tracking yet.</div>
 
         <div class="manual-form">
-          <input id="manualBoxId" class="input" placeholder="Box ID / Tracking (optional)" />
-          <input id="manualLabel" class="input" placeholder="Label (example: 'Extra parts found')" />
-          <input id="manualQty" class="input" placeholder="Pieces" type="number" min="1" />
-          <button id="addManualBtn" class="btn">Add Manual Count</button>
+          <input class="input" id="manItem" placeholder="Item (ex: Racks / Axles / Calipers)" />
+          <input class="input" id="manQty" placeholder="Qty" inputmode="numeric" />
+          <select class="input" id="manCarrier">
+            <option value="All">All / Unknown</option>
+            <option value="FedEx">FedEx</option>
+            <option value="UPS">UPS</option>
+            <option value="USPS">USPS</option>
+            <option value="Other">Other</option>
+          </select>
+          <button class="btn primary" id="btnManualAdd" type="button">Add</button>
+          <button class="btn" id="btnManualClear" type="button">Clear</button>
         </div>
 
         <div class="table-wrap">
-          <table class="table" id="manualTable">
-            <thead>
-              <tr><th>When</th><th>Box/Tracking</th><th>Label</th><th>Pieces</th><th></th></tr>
-            </thead>
+          <table class="table" id="tblManual">
+            <thead><tr><th>Item</th><th>Qty</th><th>Carrier</th><th>Action</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -190,40 +176,27 @@
     </section>
 
     <!-- MANIFEST -->
-    <section id="panel-manifest" class="panel">
-      <div class="card block">
-        <div class="card-label">Manifest (separate CSV)</div>
-        <div class="hint">Upload manifest CSV here. (This DOES export.)</div>
-
-        <div class="manifest-actions">
-          <label class="file-btn">
-            <input id="manifestCsvInput" type="file" accept=".csv,text/csv" />
-            Upload Manifest CSV
-          </label>
-
-          <button id="exportManifestBtn" class="btn">Export Manifest CSV</button>
-          <button id="clearManifestBtn" class="btn danger">Clear Manifest</button>
-        </div>
-
+    <section class="panel" id="panel-manifest">
+      <div class="card">
+        <div class="card-label">Manifest</div>
+        <div class="hint">One row per tracking ID with computed part pieces.</div>
         <div class="table-wrap">
-          <table class="table" id="manifestTable">
-            <thead id="manifestThead"></thead>
-            <tbody id="manifestTbody"></tbody>
+          <table class="table" id="tblManifest">
+            <thead><tr><th>Tracking</th><th>Carrier</th><th>Tracking Rows</th><th>Pieces</th></tr></thead>
+            <tbody></tbody>
           </table>
         </div>
       </div>
     </section>
 
     <!-- LOOSE PARTS -->
-    <section id="panel-loose" class="panel">
-      <div class="card block">
-        <div class="card-label">Loose Parts (Parts Only)</div>
-        <div class="hint">Parts where tracking/box id looks empty/invalid. Pieces are applied (xN) with cap 50.</div>
+    <section class="panel" id="panel-loose">
+      <div class="card">
+        <div class="card-label">Loose Parts (No Tracking Found)</div>
+        <div class="hint">PART rows that didn’t map to a valid tracking ID.</div>
         <div class="table-wrap">
-          <table class="table" id="looseTable">
-            <thead>
-              <tr><th>Tracking</th><th>Part</th><th>Qty</th><th>Status</th><th>Classification</th></tr>
-            </thead>
+          <table class="table" id="tblLoose">
+            <thead><tr><th>Part</th><th>Pieces</th><th>Status</th><th>Raw Tracking</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -231,70 +204,67 @@
     </section>
 
     <!-- LOGS -->
-    <section id="panel-logs" class="panel">
-      <div class="card block">
-        <div class="card-label">Logs (ON SITE ONLY — NOT in Excel/PDF)</div>
-        <div class="hint">Saved snapshots for owner visits. Stored in your browser local storage.</div>
+    <section class="panel" id="panel-logs">
+      <div class="card">
+        <div class="card-label">Logs</div>
+        <div class="hint">Saved snapshots stored in your browser (localStorage).</div>
 
-        <div class="logs-actions">
-          <button id="clearLogsBtn" class="btn danger">Clear Logs</button>
+        <div class="manual-form">
+          <input class="input" id="logNote" placeholder="Optional note (ex: shift / lane / team)" />
+          <button class="btn primary" id="btnLogAdd" type="button">Save Snapshot</button>
+          <button class="btn" id="btnLogExport" type="button">Export CSV</button>
+          <button class="btn danger" id="btnLogClearAll" type="button">Delete All</button>
         </div>
 
         <div class="table-wrap">
-          <table class="table" id="logsTable">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Tracking Rows</th>
-                <th>Unique Tracking</th>
-                <th>Total Parts</th>
-                <th>Multi-Part Boxes</th>
-                <th></th>
-              </tr>
-            </thead>
+          <table class="table" id="tblLogs">
+            <thead><tr><th>When</th><th>Note</th><th>Total Parts</th><th>Unique Tracking</th><th>Manual Qty</th><th>Action</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
-
       </div>
     </section>
   </main>
 
-  <!-- EXPORT MODAL -->
-  <div id="modalBackdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+  <footer class="footer">
+    <div id="statusLine">No WH CSV loaded.</div>
+  </footer>
 
-  <div id="exportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+  <!-- MODAL -->
+  <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+
+  <div id="modalSummary" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-header">
-      <div id="exportTitle" class="modal-title">RRPD Summary Preview</div>
-      <button id="closeModalX" class="icon-btn" aria-label="Close">×</button>
+      <div class="modal-title">RRPD Summary Preview</div>
+      <button class="icon-btn" id="btnModalX" title="Close" type="button">×</button>
     </div>
 
     <div class="modal-body">
       <div class="preview">
         <div class="preview-row">
-          <div><span class="muted">Tracking Rows:</span> <b id="prevTrackingRows">0</b></div>
-          <div><span class="muted">Unique Tracking:</span> <b id="prevUniqueTracking">0</b></div>
-          <div><span class="muted">Total Parts (pieces):</span> <b id="prevTotalParts">0</b></div>
-          <div><span class="muted">Multi-Part Boxes:</span> <b id="prevMultiPartBoxes">0</b></div>
+          <div><b>Total Scans (tracking rows):</b> <span id="pTotalScans">0</span></div>
+          <div><b>Unique Tracking:</b> <span id="pUnique">0</span></div>
+          <div><b>Total Parts (pieces):</b> <span id="pParts">0</span></div>
+          <div><b>Multi-Part Boxes:</b> <span id="pMulti">0</span></div>
+        </div>
+
+        <div class="hint" style="margin-top:10px;">
+          Export includes CSV + manual counts (racks/axles/etc) in a second section.
         </div>
 
         <label class="confirm">
-          <input id="confirmSnapshot" type="checkbox" />
-          I confirm this snapshot is correct.
+          <input type="checkbox" id="chkConfirm" />
+          <span>I confirm this snapshot is correct.</span>
         </label>
       </div>
     </div>
 
     <div class="modal-footer">
-      <button id="cancelExportBtn" class="btn">Cancel</button>
-      <button id="exportPdfBtn" class="btn">Export PDF</button>
-      <button id="exportExcelBtn" class="btn primary">Export Excel</button>
+      <button class="btn" id="btnModalCancel" type="button">Cancel</button>
+      <button class="btn" id="btnExportPDF" type="button">Export PDF</button>
+      <button class="btn primary" id="btnExportExcel" type="button">Export Excel</button>
     </div>
   </div>
-
-  <footer class="footer">
-    <div id="statusLine">No WH CSV loaded.</div>
-  </footer>
 
   <script src="script.js"></script>
 </body>
