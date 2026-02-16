@@ -1,31 +1,25 @@
-/* RRPD Receiving Dashboard - FINAL (CLICK-SAFE v4)
-   Tracking rows: ONLY classification Return Label / Packing Slip
-   Parts: any other classification
-   Quantity multiplier: xN / Nx / x N / N x (cap 50)
+/* RRPD Receiving Dashboard — robust + matches your full index.html IDs
+   Uses WH CSV columns:
+   - Tracking number (Track Num / Tracking / Tracking Number)
+   - Part number   (Part Num / Part Number / Deposo PN)
+   - PN Description (condition + label markers)
+
+   Label scan rows: PN Description == Return Label / Packing Slip (case-insensitive, trimmed)
+   Part rows: everything else
 */
 
 (() => {
   "use strict";
 
   // ----------------------------
-  // Utilities
+  // Helpers
   // ----------------------------
   const $ = (id) => document.getElementById(id);
 
-  function on(id, evt, fn, opts) {
+  function on(id, evt, fn) {
     const el = $(id);
-    if (!el) return false;
-    el.addEventListener(evt, fn, opts);
-    return true;
-  }
-
-  function setText(id, val) {
-    const el = $(id);
-    if (el) el.textContent = String(val);
-  }
-
-  function safeLower(v) {
-    return (v ?? "").toString().trim().toLowerCase();
+    if (!el) return;
+    el.addEventListener(evt, fn);
   }
 
   function asString(v) {
@@ -33,402 +27,462 @@
     return String(v).trim();
   }
 
-  function looksLikeScientific(str) {
-    return /^[0-9]+(\.[0-9]+)?e\+?[0-9]+$/i.test(str.trim());
+  function safeLower(v) {
+    return asString(v).toLowerCase();
   }
 
-  function sciToPlainString(s) {
-    const t = asString(s);
-    if (!t) return "";
-    if (!looksLikeScientific(t)) return t;
-    const n = Number(t);
-    if (!Number.isFinite(n)) return t;
-    return Math.round(n).toString();
-  }
-
-  function parsePartAndQty(partRaw) {
-    let part = asString(partRaw);
-    if (!part) return { basePart: "", qty: 1 };
-
-    let qty = 1;
-    const cap = 50;
-    let s = part.replace(/\s+/g, " ").trim();
-
-    const m1 = s.match(/(?:^|[\s\-])x\s*(\d{1,3})\s*$/i);
-    const m2 = s.match(/(?:^|[\s\-])(\d{1,3})\s*x\s*$/i);
-    const m3 = s.match(/(?:^|[\s\-])\*\s*(\d{1,3})\s*$/i);
-
-    let found = null;
-    if (m1) found = m1[1];
-    else if (m2) found = m2[1];
-    else if (m3) found = m3[1];
-
-    if (found) {
-      const n = parseInt(found, 10);
-      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
-
-      s = s
-        .replace(/(?:^|[\s\-])x\s*\d{1,3}\s*$/i, "")
-        .replace(/(?:^|[\s\-])\d{1,3}\s*x\s*$/i, "")
-        .replace(/(?:^|[\s\-])\*\s*\d{1,3}\s*$/i, "")
-        .trim();
-    }
-
-    const stuck = s.match(/^(.*?)(?:x|\*)(\d{1,3})$/i);
-    if (stuck) {
-      const n = parseInt(stuck[2], 10);
-      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
-      s = stuck[1].trim();
-    }
-
-    return { basePart: s, qty };
-  }
-
-  function guessCarrier(trackingRaw) {
-    const tracking = asString(trackingRaw);
-    if (!tracking) return "Other";
-
-    if (/^1Z/i.test(tracking)) return "UPS";
-    if (/^(92|93|94|95)\d{20,22}$/.test(tracking)) return "USPS";
-    if (/^9\d{21,22}$/.test(tracking)) return "USPS";
-    if (/^\d{12,15}$/.test(tracking)) return "FedEx";
-    if (/^\d{20,22}$/.test(tracking)) return "FedEx";
-
-    return "Other";
-  }
-
-  function isTrackingClassification(classification) {
-    const c = safeLower(classification);
-    return c === "return label" || c === "packing slip";
+  function setText(id, v) {
+    const el = $(id);
+    if (el) el.textContent = String(v);
   }
 
   function pickField(row, keys) {
+    // exact keys first
     for (const k of keys) {
       if (row && Object.prototype.hasOwnProperty.call(row, k)) {
         const v = asString(row[k]);
         if (v) return v;
       }
     }
+    // case-insensitive fallback
     const rowKeys = Object.keys(row || {});
-    const lowered = rowKeys.map((x) => [x, x.toLowerCase()]);
+    const lowerMap = new Map(rowKeys.map(k => [k.toLowerCase(), k]));
     for (const want of keys) {
-      const w = want.toLowerCase();
-      const found = lowered.find((p) => p[1] === w);
+      const found = lowerMap.get(want.toLowerCase());
       if (found) {
-        const v = asString(row[found[0]]);
+        const v = asString(row[found]);
         if (v) return v;
       }
     }
     return "";
   }
 
+  // Excel scientific notation string → plain digits (string math, no Number())
+  function sciToPlainString(raw) {
+    const s = asString(raw);
+    if (!s) return "";
+    const m = s.match(/^([0-9]+)(?:\.([0-9]+))?[eE]\+?([0-9]+)$/);
+    if (!m) return s;
+
+    const intPart = m[1];
+    const fracPart = m[2] || "";
+    const exp = parseInt(m[3], 10);
+    if (!Number.isFinite(exp)) return s;
+
+    const digits = intPart + fracPart;
+    const decimalPlaces = fracPart.length;
+    const shift = exp - decimalPlaces;
+
+    if (shift >= 0) return digits + "0".repeat(shift);
+    return s; // don’t produce decimals for IDs
+  }
+
+  function normalizeTracking(t) {
+    const x = sciToPlainString(t);
+    return asString(x).replace(/\s+/g, "");
+  }
+
+  // Stronger label detection without accidentally matching real conditions.
+  // Accepts:
+  // - "Return Label"
+  // - "Packing Slip"
+  // - "Return Label Scan"
+  // - "Packing Slip Scan"
+  function isLabelType(descRaw) {
+    const d = safeLower(descRaw).replace(/\s+/g, " ").trim();
+    if (!d) return false;
+
+    if (d === "return label" || d === "packing slip") return true;
+
+    // allow safe variants only if they START with the label phrase
+    if (d.startsWith("return label")) return true;
+    if (d.startsWith("packing slip")) return true;
+
+    return false;
+  }
+
+  function parseIntSafe(v) {
+    const s = asString(v);
+    if (!s) return 0;
+    const n = parseInt(s.replace(/[^\d]/g, ""), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  // Qty parsing: use Qty column if exists, else allow "x2" / "2x" on part number
+  function parseQtyFromPart(partRaw) {
+    const cap = 50;
+    let s = asString(partRaw);
+    if (!s) return { part: "", qty: 1 };
+
+    s = s.replace(/\s+/g, " ").trim();
+
+    let qty = 1;
+    const m1 = s.match(/(?:^|[\s\-])x\s*(\d{1,3})\s*$/i);
+    const m2 = s.match(/(?:^|[\s\-])(\d{1,3})\s*x\s*$/i);
+
+    const found = m1?.[1] || m2?.[1] || null;
+    if (found) {
+      const n = parseInt(found, 10);
+      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
+      s = s
+        .replace(/(?:^|[\s\-])x\s*\d{1,3}\s*$/i, "")
+        .replace(/(?:^|[\s\-])\d{1,3}\s*x\s*$/i, "")
+        .trim();
+    }
+
+    // handle stuck: "68331804x2"
+    const stuck = s.match(/^(.*?)(?:x)(\d{1,3})$/i);
+    if (stuck) {
+      const n = parseInt(stuck[2], 10);
+      if (Number.isFinite(n) && n > 0) qty = Math.min(n, cap);
+      s = stuck[1].trim();
+    }
+
+    return { part: sciToPlainString(s) || s, qty };
+  }
+
+  function downloadText(filename, text, mime = "text/plain;charset=utf-8") {
+    const blob = new Blob([text], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }
+
   // ----------------------------
   // State
   // ----------------------------
   const state = {
-    rows: [],
-    byTracking: new Map(),
-    looseParts: [],
-    manualCounts: [],     // { item, qty, carrier }
+    whRows: [],
+    labelScans: [],  // { tracking, type }
+    partRows: [],    // { tracking, part, qty, condition }
+
+    manualCounts: [], // { item, qty, condition }
+    looseParts: [],   // { part, qty, condition }
+
+    carriers: { FedEx: 0, UPS: 0, USPS: 0, Other: 0 },
+
+    manifestRows: [],
+    manifestTracking: [],
+
     logs: [],
-    carrierChart: null,
-    returnsChart: null
+
+    returnsChart: null,
+    manualChart: null,
+    carrierChart: null
   };
 
   // ----------------------------
-  // Compute
+  // Compute WH from CSV
   // ----------------------------
-  function resetComputed() {
-    state.byTracking.clear();
-    state.looseParts = [];
-  }
+  function computeFromWH(rows) {
+    state.labelScans = [];
+    state.partRows = [];
 
-  function upsertAgg(tracking) {
-    if (!state.byTracking.has(tracking)) {
-      state.byTracking.set(tracking, {
-        tracking,
-        carrier: guessCarrier(tracking),
-        trackingRows: 0,
-        partsPieces: 0,
-        partRows: 0,
-        parts: [], // {part, qty, status}
-      });
+    const trackingKeys = ["Track Num","Tracking","Tracking Number","TrackingNumber","Return Tracking"];
+    const partKeys = ["Part Num","Part Number","PN","Deposo PN","DeposoPN"];
+    const descKeys = ["PN Description","PNDescription","Description","Part Description"];
+    const qtyKeys = ["Qty","Quantity","Pieces"];
+
+    // small debug: show headers it saw
+    if (rows?.[0]) {
+      console.log("[RRPD] WH headers:", Object.keys(rows[0] || {}));
     }
-    return state.byTracking.get(tracking);
-  }
-
-  function computeFromRows(rows) {
-    resetComputed();
-
-    const classificationKeys = ["Classification","classification","Type","type","Category","category"];
-    const trackingKeys = ["Tracking","tracking","Tracking Number","tracking number","TrackingNumber","trackingNumber","Return Tracking","return tracking"];
-    const partKeys = ["Deposo PN","DeposoPN","Part","Part Number","PartNumber","part","part number"];
-    const statusKeys = ["Status","status","Condition","condition"];
-    const qtyKeys = ["Qty","qty","Quantity","quantity","Pieces","pieces"];
 
     for (const row of rows) {
-      const classification = pickField(row, classificationKeys);
-      const isTrackingRow = isTrackingClassification(classification);
+      const trackingRaw = pickField(row, trackingKeys);
+      const partRaw = pickField(row, partKeys);
+      const descRaw = pickField(row, descKeys);
 
-      let tracking = pickField(row, trackingKeys);
+      const tracking = normalizeTracking(trackingRaw);
+      const pnDesc = asString(descRaw);
 
-      if (!tracking) {
-        const values = Object.values(row || {}).map(asString).filter(Boolean);
-        const candidate = values.find(v =>
-          /^1Z/i.test(v) || /^\d{12,22}$/.test(v) || looksLikeScientific(v)
-        );
-        tracking = candidate || "";
+      // LABEL ROW
+      if (isLabelType(pnDesc)) {
+        if (tracking) state.labelScans.push({ tracking, type: pnDesc.trim() });
+        continue;
       }
 
-      tracking = sciToPlainString(tracking);
-      const status = pickField(row, statusKeys);
+      // PART ROW
+      const qtyCol = parseIntSafe(pickField(row, qtyKeys));
+      const parsed = parseQtyFromPart(partRaw);
+      const qty = qtyCol > 0 ? Math.min(qtyCol, 50) : (parsed.qty || 1);
 
-      if (!isTrackingRow) {
-        let partRaw = pickField(row, partKeys);
+      const part = sciToPlainString(parsed.part || partRaw || "") || "(blank)";
+      const condition = pnDesc || "(blank)";
 
-        if (!partRaw) {
-          const values = Object.values(row || {}).map(asString).filter(Boolean);
-          partRaw =
-            values.find(v => !/^1Z/i.test(v) && !/^\d{12,22}$/.test(v) && !looksLikeScientific(v)) || "";
-        }
-
-        const qtyFromColumnRaw = pickField(row, qtyKeys);
-        let qtyFromColumn = 0;
-        if (qtyFromColumnRaw) {
-          const n = parseInt(qtyFromColumnRaw.replace(/[^\d]/g, ""), 10);
-          if (Number.isFinite(n) && n > 0) qtyFromColumn = Math.min(n, 50);
-        }
-
-        const parsed = parsePartAndQty(partRaw);
-        const qty = qtyFromColumn > 0 ? qtyFromColumn : parsed.qty;
-        const basePart = parsed.basePart || partRaw;
-
-        const partObj = { part: basePart || "(blank)", qty, status: status || "" };
-
-        if (tracking) {
-          const agg = upsertAgg(tracking);
-          agg.partRows += 1;
-          agg.partsPieces += qty;
-          agg.parts.push(partObj);
-        } else {
-          state.looseParts.push({ ...partObj, rawTracking: "" });
-        }
-      } else {
-        if (!tracking) continue;
-        const agg = upsertAgg(tracking);
-        agg.trackingRows += 1;
-      }
+      state.partRows.push({ tracking, part, qty, condition });
     }
+  }
+
+  function whPackagesCount() {
+    return state.labelScans.length; // NOT unique
+  }
+
+  function whPartsPieces() {
+    return state.partRows.reduce((a, x) => a + (x.qty || 0), 0);
+  }
+
+  // ----------------------------
+  // Returns Condition (WH parts)
+  // ----------------------------
+  function computeReturnsCondition() {
+    const map = new Map(); // condition -> {rows, pieces}
+    for (const p of state.partRows) {
+      const key = asString(p.condition) || "(blank)";
+      if (!map.has(key)) map.set(key, { rows: 0, pieces: 0 });
+      const obj = map.get(key);
+      obj.rows += 1;
+      obj.pieces += (p.qty || 1);
+    }
+    return Array.from(map.entries()).sort((a,b) => b[1].pieces - a[1].pieces);
+  }
+
+  // ----------------------------
+  // Manifest Compare
+  // ----------------------------
+  function computeManifestCompare() {
+    const scannedSet = new Set(state.labelScans.map(x => x.tracking).filter(Boolean));
+    const manifestSet = new Set(state.manifestTracking.filter(Boolean));
+
+    const missing = [];
+    for (const t of manifestSet) if (!scannedSet.has(t)) missing.push(t);
+
+    const extra = [];
+    for (const t of scannedSet) if (!manifestSet.has(t)) extra.push(t);
+
+    missing.sort();
+    extra.sort();
+
+    return {
+      manifestTotal: manifestSet.size,
+      matched: Math.max(0, manifestSet.size - missing.length),
+      missing,
+      extra
+    };
+  }
+
+  // ----------------------------
+  // Charts (safe guards)
+  // ----------------------------
+  function chartSafeCreate(existing, canvasId, config) {
+    const canvas = $(canvasId);
+    if (!canvas || !window.Chart) return existing;
+    try {
+      if (existing) return existing;
+      return new Chart(canvas, config);
+    } catch (e) {
+      console.warn("[RRPD] Chart error:", e);
+      return existing;
+    }
+  }
+
+  function updateReturnsChart(pairs) {
+    const top = pairs.slice(0, 10);
+    const labels = top.map(x => x[0]);
+    const data = top.map(x => x[1].pieces);
+
+    if (state.returnsChart) {
+      state.returnsChart.data.labels = labels;
+      state.returnsChart.data.datasets[0].data = data;
+      state.returnsChart.update();
+      return;
+    }
+
+    state.returnsChart = chartSafeCreate(state.returnsChart, "returnsChart", {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Pieces", data }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  function updateManualChart() {
+    const map = new Map(); // condition -> qty
+    for (const m of state.manualCounts) {
+      const k = asString(m.condition) || "(blank)";
+      map.set(k, (map.get(k) || 0) + (m.qty || 0));
+    }
+    const pairs = Array.from(map.entries()).sort((a,b) => b[1] - a[1]).slice(0, 10);
+
+    const labels = pairs.map(x => x[0]);
+    const data = pairs.map(x => x[1]);
+
+    if (state.manualChart) {
+      state.manualChart.data.labels = labels;
+      state.manualChart.data.datasets[0].data = data;
+      state.manualChart.update();
+      return;
+    }
+
+    state.manualChart = chartSafeCreate(state.manualChart, "manualChart", {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Qty", data }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  function updateCarrierChart() {
+    const labels = ["FedEx","UPS","USPS","Other"];
+    const data = labels.map(k => state.carriers[k] || 0);
+
+    if (state.carrierChart) {
+      state.carrierChart.data.labels = labels;
+      state.carrierChart.data.datasets[0].data = data;
+      state.carrierChart.update();
+      return;
+    }
+
+    state.carrierChart = chartSafeCreate(state.carrierChart, "carrierChart", {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Count", data }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  // ----------------------------
+  // Render
+  // ----------------------------
+  function renderDashboard() {
+    setText("mPackages", whPackagesCount());
+    setText("mParts", whPartsPieces());
+
+    const tbody = $("tblTrackingSamples")?.querySelector("tbody");
+    if (tbody) {
+      tbody.innerHTML = "";
+      const latest = state.labelScans.slice(-25).reverse();
+      latest.forEach((x, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i+1}</td><td>${x.tracking}</td><td>${x.type}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+
+  function renderReturns() {
+    const pairs = computeReturnsCondition();
+    const tbody = $("tblReturns")?.querySelector("tbody");
+    if (tbody) {
+      tbody.innerHTML = "";
+      pairs.forEach(([cond, v]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${cond}</td><td>${v.rows}</td><td>${v.pieces}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    updateReturnsChart(pairs);
+  }
+
+  function renderManualTable() {
+    const tbody = $("tblManual")?.querySelector("tbody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+
+    state.manualCounts.forEach((m, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${m.item}</td>
+        <td>${m.qty}</td>
+        <td>${m.condition}</td>
+        <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderLooseTable() {
+    const tbody = $("tblLoose")?.querySelector("tbody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+
+    state.looseParts.forEach((m, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${m.part}</td>
+        <td>${m.qty}</td>
+        <td>${m.condition}</td>
+        <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderCarriersTable() {
+    const tbody = $("tblCarriers")?.querySelector("tbody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+
+    ["FedEx","UPS","USPS","Other"].forEach(k => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${k}</td><td>${state.carriers[k] || 0}</td>`;
+      tbody.appendChild(tr);
+    });
+
+    updateCarrierChart();
+  }
+
+  function renderManifest() {
+    const out = computeManifestCompare();
+
+    setText("mManifestTotal", out.manifestTotal);
+    setText("mManifestMatched", out.matched);
+    setText("mManifestMissing", out.missing.length);
+
+    const missBody = $("tblMissing")?.querySelector("tbody");
+    if (missBody) {
+      missBody.innerHTML = "";
+      out.missing.slice(0, 5000).forEach((t, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i+1}</td><td>${t}</td>`;
+        missBody.appendChild(tr);
+      });
+    }
+
+    const extraBody = $("tblExtra")?.querySelector("tbody");
+    if (extraBody) {
+      extraBody.innerHTML = "";
+      out.extra.slice(0, 5000).forEach((t, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i+1}</td><td>${t}</td>`;
+        extraBody.appendChild(tr);
+      });
+    }
+
+    setText("pManifestMissing", out.missing.length);
   }
 
   function manualTotalQty() {
     return state.manualCounts.reduce((a, x) => a + (x.qty || 0), 0);
   }
 
-  // ----------------------------
-  // Charts (never allowed to break the page)
-  // ----------------------------
-  function safeChartDestroy(chart) {
-    try { chart?.destroy?.(); } catch {}
+  function renderStatusLine() {
+    const status = $("statusLine");
+    if (!status) return;
+
+    const msg =
+      state.whRows.length === 0
+        ? "No WH CSV loaded."
+        : `Loaded ${state.whRows.length} WH rows. Packages (label scans): ${whPackagesCount()}. Parts (pieces): ${whPartsPieces()}. Manual qty: ${manualTotalQty()}.`;
+
+    status.textContent = msg;
+
+    setText("pPackages", whPackagesCount());
+    setText("pParts", whPartsPieces());
+    setText("pManualQty", manualTotalQty());
   }
 
-  function updateCarrierChart(counts) {
-    const canvas = $("carrierChart");
-    if (!canvas || !window.Chart) return;
-
-    const labels = ["FedEx", "UPS", "USPS", "Other"];
-    const data = [counts.FedEx, counts.UPS, counts.USPS, counts.Other];
-
-    try {
-      if (state.carrierChart) {
-        state.carrierChart.data.labels = labels;
-        state.carrierChart.data.datasets[0].data = data;
-        state.carrierChart.update();
-        return;
-      }
-
-      state.carrierChart = new Chart(canvas, {
-        type: "bar",
-        data: { labels, datasets: [{ label: "Tracking Rows", data }] },
-        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-      });
-    } catch (e) {
-      console.error("Carrier chart error:", e);
-      safeChartDestroy(state.carrierChart);
-      state.carrierChart = null;
-    }
-  }
-
-  function updateReturnsChart(statusPairs) {
-    const canvas = $("returnsChart");
-    if (!canvas || !window.Chart) return;
-
-    const top = statusPairs.slice(0, 8);
-    const labels = top.map(x => x[0]);
-    const data = top.map(x => x[1].pieces);
-
-    try {
-      if (state.returnsChart) {
-        state.returnsChart.data.labels = labels;
-        state.returnsChart.data.datasets[0].data = data;
-        state.returnsChart.update();
-        return;
-      }
-
-      state.returnsChart = new Chart(canvas, {
-        type: "bar",
-        data: { labels, datasets: [{ label: "Pieces", data }] },
-        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-      });
-    } catch (e) {
-      console.error("Returns chart error:", e);
-      safeChartDestroy(state.returnsChart);
-      state.returnsChart = null;
-    }
-  }
-
-  // ----------------------------
-  // Render
-  // ----------------------------
   function renderAll() {
-    const list = Array.from(state.byTracking.values());
-
-    let counts = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
-    let totalScans = 0;
-    let uniqueTracking = list.length;
-    let totalParts = 0;
-    let multiPartBoxes = 0;
-
-    for (const agg of list) {
-      totalScans += agg.trackingRows;
-      totalParts += agg.partsPieces;
-      if (agg.partsPieces > 1) multiPartBoxes += 1;
-      counts[agg.carrier] = (counts[agg.carrier] || 0) + agg.trackingRows;
-    }
-
-    setText("mFedEx", counts.FedEx || 0);
-    setText("mUPS", counts.UPS || 0);
-    setText("mUSPS", counts.USPS || 0);
-    setText("mOther", counts.Other || 0);
-    setText("mTotalScans", totalScans);
-    setText("mUniqueTracking", uniqueTracking);
-    setText("mTotalParts", totalParts);
-    setText("mMultiPartBoxes", multiPartBoxes);
-
-    updateCarrierChart({
-      FedEx: counts.FedEx || 0,
-      UPS: counts.UPS || 0,
-      USPS: counts.USPS || 0,
-      Other: counts.Other || 0
-    });
-
-    // samples
-    const samplesBody = $("tblSamples")?.querySelector("tbody");
-    if (samplesBody) {
-      samplesBody.innerHTML = "";
-      const latest = list.slice(-25).reverse();
-      latest.forEach((agg, i) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${i + 1}</td><td>${agg.tracking}</td><td>${agg.carrier}</td><td>${agg.partsPieces}</td>`;
-        samplesBody.appendChild(tr);
-      });
-    }
-
-    // repeated
-    const repBody = $("tblRepeated")?.querySelector("tbody");
-    if (repBody) {
-      repBody.innerHTML = "";
-      const repeated = list
-        .filter(a => a.trackingRows > 1)
-        .sort((a,b) => b.trackingRows - a.trackingRows)
-        .slice(0, 25);
-
-      repeated.forEach((agg) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${agg.tracking}</td><td>${agg.trackingRows}</td><td>${agg.carrier}</td>`;
-        repBody.appendChild(tr);
-      });
-    }
-
-    // carriers table
-    const carriersBody = $("tblCarriers")?.querySelector("tbody");
-    if (carriersBody) {
-      carriersBody.innerHTML = "";
-      ["FedEx","UPS","USPS","Other"].forEach((c) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${c}</td><td>${counts[c] || 0}</td>`;
-        carriersBody.appendChild(tr);
-      });
-    }
-
-    // returns condition
-    const returnsBody = $("tblReturns")?.querySelector("tbody");
-    const statusMap = new Map(); // status -> {rows, pieces}
-    for (const agg of list) {
-      for (const p of agg.parts) {
-        const key = asString(p.status) || "(blank)";
-        if (!statusMap.has(key)) statusMap.set(key, { rows: 0, pieces: 0 });
-        const obj = statusMap.get(key);
-        obj.rows += 1;
-        obj.pieces += (p.qty || 1);
-      }
-    }
-    const statusPairs = Array.from(statusMap.entries())
-      .sort((a,b) => b[1].pieces - a[1].pieces);
-
-    if (returnsBody) {
-      returnsBody.innerHTML = "";
-      statusPairs.forEach(([status, v]) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${status}</td><td>${v.rows}</td><td>${v.pieces}</td>`;
-        returnsBody.appendChild(tr);
-      });
-    }
-
-    updateReturnsChart(statusPairs);
-
-    // manifest
-    const manBody = $("tblManifest")?.querySelector("tbody");
-    if (manBody) {
-      manBody.innerHTML = "";
-      const sorted = list.slice().sort((a,b) => b.partsPieces - a.partsPieces);
-      sorted.forEach((agg) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${agg.tracking}</td><td>${agg.carrier}</td><td>${agg.trackingRows}</td><td>${agg.partsPieces}</td>`;
-        manBody.appendChild(tr);
-      });
-    }
-
-    // loose
-    const looseBody = $("tblLoose")?.querySelector("tbody");
-    if (looseBody) {
-      looseBody.innerHTML = "";
-      state.looseParts.forEach((p) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${p.part}</td><td>${p.qty}</td><td>${p.status || ""}</td><td>${p.rawTracking || ""}</td>`;
-        looseBody.appendChild(tr);
-      });
-    }
-
-    // manual table
+    renderDashboard();
+    renderReturns();
     renderManualTable();
-
-    // modal preview numbers
-    setText("pTotalScans", totalScans);
-    setText("pUnique", uniqueTracking);
-    setText("pParts", totalParts);
-    setText("pMulti", multiPartBoxes);
-
-    // status line
-    const statusLine = $("statusLine");
-    if (statusLine) {
-      const manQty = manualTotalQty();
-      const base =
-        uniqueTracking === 0 && state.rows.length === 0 && state.manualCounts.length === 0
-          ? "No WH CSV loaded."
-          : `Loaded ${state.rows.length} CSV rows. Unique tracking: ${uniqueTracking}. Total parts (pieces): ${totalParts}. Manual qty: ${manQty}.`;
-      statusLine.textContent = base;
-    }
+    renderLooseTable();
+    renderCarriersTable();
+    renderManifest();
+    updateManualChart();
+    renderStatusLine();
+    renderLogsTable();
   }
 
   // ----------------------------
@@ -454,36 +508,69 @@
   }
 
   // ----------------------------
-  // Modal
+  // Modal: View All Tracking (with fallback)
   // ----------------------------
-  function showSummaryModal() {
-    const modal = $("modalSummary");
+  function showTrackingModalOrDownload() {
+    // If modal exists, show it
     const backdrop = $("modalBackdrop");
-    if (!modal || !backdrop) return;
+    const modal = $("modalTracking");
+    const body = $("tblAllTracking")?.querySelector("tbody");
 
+    if (backdrop && modal && body) {
+      backdrop.classList.remove("hidden");
+      modal.classList.remove("hidden");
+
+      body.innerHTML = "";
+      state.labelScans.forEach((x, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i+1}</td><td>${x.tracking}</td><td>${x.type}</td>`;
+        body.appendChild(tr);
+      });
+      return;
+    }
+
+    // Fallback: download CSV
+    const lines = ["#,tracking,type"];
+    state.labelScans.forEach((x, i) => {
+      lines.push(`${i+1},${x.tracking},"${String(x.type || "").replace(/"/g,'""')}"`);
+    });
+    downloadText(`rrpd_all_label_scans_${new Date().toISOString().slice(0,10)}.csv`, lines.join("\n"), "text/csv;charset=utf-8");
+  }
+
+  function hideTrackingModal() {
+    $("modalBackdrop")?.classList.add("hidden");
+    $("modalTracking")?.classList.add("hidden");
+  }
+
+  // ----------------------------
+  // Modal: Export
+  // ----------------------------
+  function showExportModal() {
     const chk = $("chkConfirm");
     if (chk) chk.checked = false;
-
-    backdrop.classList.remove("hidden");
-    modal.classList.remove("hidden");
+    $("exportBackdrop")?.classList.remove("hidden");
+    $("exportModal")?.classList.remove("hidden");
   }
 
-  function hideSummaryModal() {
-    $("modalSummary")?.classList.add("hidden");
-    $("modalBackdrop")?.classList.add("hidden");
+  function hideExportModal() {
+    $("exportBackdrop")?.classList.add("hidden");
+    $("exportModal")?.classList.add("hidden");
   }
 
-  function bindModal() {
-    on("modalBackdrop", "click", hideSummaryModal);
-    on("btnModalX", "click", hideSummaryModal);
-    on("btnModalCancel", "click", hideSummaryModal);
+  function requireConfirm() {
+    const chk = $("chkConfirm");
+    if (!chk || !chk.checked) {
+      alert("Please check: 'I confirm this snapshot is correct.'");
+      return false;
+    }
+    return true;
   }
 
   // ----------------------------
-  // CSV load
+  // CSV Upload: WH
   // ----------------------------
-  function bindCSV() {
-    const input = $("csvFile");
+  function bindWHUpload() {
+    const input = $("whFile");
     if (!input) return;
 
     input.addEventListener("change", () => {
@@ -491,7 +578,7 @@
       if (!file) return;
 
       if (!window.Papa) {
-        alert("PapaParse failed to load. Check internet/CDN.");
+        alert("PapaParse failed to load (internet issue). Refresh and try again.");
         return;
       }
 
@@ -499,67 +586,107 @@
         header: true,
         skipEmptyLines: true,
         complete: (res) => {
-          state.rows = Array.isArray(res.data) ? res.data : [];
-          computeFromRows(state.rows);
+          state.whRows = Array.isArray(res.data) ? res.data : [];
+          computeFromWH(state.whRows);
           renderAll();
         },
         error: (err) => {
-          console.error("CSV parse error:", err);
-          alert("CSV parse error. Check the file format.");
+          console.error("WH CSV parse error:", err);
+          alert("WH CSV parse error. Check the file format.");
         }
       });
     });
   }
 
   // ----------------------------
-  // Manual Counts (FIXED delete works now)
+  // CSV Upload: Manifest
   // ----------------------------
-  function renderManualTable() {
-    const body = $("tblManual")?.querySelector("tbody");
-    if (!body) return;
+  function bindManifestUpload() {
+    const input = $("manifestFile");
+    if (!input) return;
 
-    body.innerHTML = "";
-    state.manualCounts.forEach((m, idx) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${m.item}</td>
-        <td>${m.qty}</td>
-        <td>${m.carrier}</td>
-        <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
-      `;
-      body.appendChild(tr);
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      if (!window.Papa) {
+        alert("PapaParse failed to load (internet issue). Refresh and try again.");
+        return;
+      }
+
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (res) => {
+          state.manifestRows = Array.isArray(res.data) ? res.data : [];
+
+          const keys = ["Tracking","Tracking Number","TrackingNumber","Track Num","TrackNum","Shipment Tracking Number"];
+          const list = [];
+
+          for (const row of state.manifestRows) {
+            let t = pickField(row, keys);
+
+            if (!t) {
+              const values = Object.values(row || {}).map(asString).filter(Boolean);
+              t = values.find(v =>
+                /^1Z/i.test(v) ||
+                /^\d{12,22}$/.test(v) ||
+                /^[0-9]+(\.[0-9]+)?e\+?[0-9]+$/i.test(v)
+              ) || "";
+            }
+
+            const nt = normalizeTracking(t);
+            if (nt) list.push(nt);
+          }
+
+          state.manifestTracking = list;
+          renderAll();
+        },
+        error: (err) => {
+          console.error("Manifest CSV parse error:", err);
+          alert("Manifest CSV parse error. Check the file format.");
+        }
+      });
+    });
+
+    on("btnManifestClear", "click", () => {
+      state.manifestRows = [];
+      state.manifestTracking = [];
+      if ($("manifestFile")) $("manifestFile").value = "";
+      renderAll();
     });
   }
 
-  function bindManual() {
+  // ----------------------------
+  // Manual Counts
+  // ----------------------------
+  function bindManualCounts() {
     on("btnManualAdd", "click", () => {
       const item = asString($("manItem")?.value);
-      const qtyRaw = asString($("manQty")?.value);
-      const carrier = asString($("manCarrier")?.value) || "All";
+      const qty = parseIntSafe($("manQty")?.value);
+      const condition = asString($("manCondition")?.value);
 
-      const qty = parseInt(qtyRaw.replace(/[^\d]/g, ""), 10);
-      if (!item) return alert("Enter an item (ex: Racks, Axles).");
-      if (!Number.isFinite(qty) || qty <= 0) return alert("Enter a valid qty.");
+      if (!item) return alert("Enter an item (ex: Racks / Axles / Gearboxes).");
+      if (!qty || qty <= 0) return alert("Enter a valid qty.");
+      if (!condition) return alert("Enter a condition (ex: Good / Damaged / Not Our Part).");
 
-      state.manualCounts.unshift({ item, qty, carrier });
-
+      state.manualCounts.unshift({ item, qty, condition });
       if ($("manItem")) $("manItem").value = "";
       if ($("manQty")) $("manQty").value = "";
-      if ($("manCarrier")) $("manCarrier").value = "All";
-
+      if ($("manCondition")) $("manCondition").value = "";
       renderAll();
     });
 
     on("btnManualClear", "click", () => {
       if ($("manItem")) $("manItem").value = "";
       if ($("manQty")) $("manQty").value = "";
-      if ($("manCarrier")) $("manCarrier").value = "All";
+      if ($("manCondition")) $("manCondition").value = "";
     });
 
-    // ✅ Delete handler (delegated) — this was missing in your version
-    const body = $("tblManual")?.querySelector("tbody");
-    if (body) {
-      body.addEventListener("click", (e) => {
+    // delete delegation (bind once)
+    const tbody = $("tblManual")?.querySelector("tbody");
+    if (tbody) {
+      tbody.addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-del]");
         if (!btn) return;
         const i = parseInt(btn.dataset.del, 10);
@@ -571,15 +698,76 @@
   }
 
   // ----------------------------
-  // Logs (localStorage)
+  // Loose Parts (manual)
   // ----------------------------
-  const LOG_KEY = "rrpd_logs_final_v4";
+  function bindLooseParts() {
+    on("btnLooseAdd", "click", () => {
+      const part = asString($("loosePart")?.value);
+      const qty = parseIntSafe($("looseQty")?.value);
+      const condition = asString($("looseCondition")?.value);
+
+      if (!part) return alert("Enter a part.");
+      if (!qty || qty <= 0) return alert("Enter a valid qty.");
+      if (!condition) return alert("Enter a condition.");
+
+      state.looseParts.unshift({ part: sciToPlainString(part) || part, qty, condition });
+      if ($("loosePart")) $("loosePart").value = "";
+      if ($("looseQty")) $("looseQty").value = "";
+      if ($("looseCondition")) $("looseCondition").value = "";
+      renderAll();
+    });
+
+    on("btnLooseClear", "click", () => {
+      if ($("loosePart")) $("loosePart").value = "";
+      if ($("looseQty")) $("looseQty").value = "";
+      if ($("looseCondition")) $("looseCondition").value = "";
+    });
+
+    // delete delegation (bind once)
+    const tbody = $("tblLoose")?.querySelector("tbody");
+    if (tbody) {
+      tbody.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-del]");
+        if (!btn) return;
+        const i = parseInt(btn.dataset.del, 10);
+        if (!Number.isFinite(i)) return;
+        state.looseParts.splice(i, 1);
+        renderAll();
+      });
+    }
+  }
+
+  // ----------------------------
+  // Carriers (manual totals)
+  // ----------------------------
+  function bindCarriers() {
+    on("btnCarriersApply", "click", () => {
+      state.carriers.FedEx = parseIntSafe($("carFedEx")?.value);
+      state.carriers.UPS   = parseIntSafe($("carUPS")?.value);
+      state.carriers.USPS  = parseIntSafe($("carUSPS")?.value);
+      state.carriers.Other = parseIntSafe($("carOther")?.value);
+      renderAll();
+    });
+
+    on("btnCarriersClear", "click", () => {
+      state.carriers = { FedEx: 0, UPS: 0, USPS: 0, Other: 0 };
+      if ($("carFedEx")) $("carFedEx").value = "";
+      if ($("carUPS")) $("carUPS").value = "";
+      if ($("carUSPS")) $("carUSPS").value = "";
+      if ($("carOther")) $("carOther").value = "";
+      renderAll();
+    });
+  }
+
+  // ----------------------------
+  // Logs
+  // ----------------------------
+  const LOG_KEY = "rrpd_logs_v4";
 
   function loadLogs() {
     try {
       const raw = localStorage.getItem(LOG_KEY);
-      if (!raw) return [];
-      const arr = JSON.parse(raw);
+      const arr = raw ? JSON.parse(raw) : [];
       return Array.isArray(arr) ? arr : [];
     } catch {
       return [];
@@ -587,12 +775,7 @@
   }
 
   function saveLogs() {
-    try {
-      localStorage.setItem(LOG_KEY, JSON.stringify(state.logs));
-    } catch (e) {
-      console.error("localStorage save failed:", e);
-      alert("Saving logs failed (storage blocked/full).");
-    }
+    localStorage.setItem(LOG_KEY, JSON.stringify(state.logs));
   }
 
   function renderLogsTable() {
@@ -605,8 +788,8 @@
       tr.innerHTML = `
         <td>${l.when}</td>
         <td>${l.note || ""}</td>
-        <td>${l.totalParts}</td>
-        <td>${l.uniqueTracking}</td>
+        <td>${l.packages}</td>
+        <td>${l.parts}</td>
         <td>${l.manualQty}</td>
         <td><button class="btn danger" data-del="${idx}" type="button">Delete</button></td>
       `;
@@ -614,62 +797,50 @@
     });
   }
 
-  function exportLogsCSV() {
-    if (!window.saveAs) {
-      alert("FileSaver failed to load. Check internet/CDN.");
-      return;
-    }
-
-    const header = ["when","note","totalParts","uniqueTracking","totalScans","manualQty"];
-    const lines = [header.join(",")];
-    for (const l of state.logs) {
-      lines.push([
-        l.when,
-        `"${(l.note || "").replace(/"/g, '""')}"`,
-        l.totalParts,
-        l.uniqueTracking,
-        l.totalScans,
-        l.manualQty
-      ].join(","));
-    }
-
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    saveAs(blob, `rrpd_logs_${new Date().toISOString().slice(0,10)}.csv`);
-  }
-
   function bindLogs() {
     state.logs = loadLogs();
     renderLogsTable();
 
     on("btnLogAdd", "click", () => {
-      const list = Array.from(state.byTracking.values());
-      const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
-      const uniqueTracking = list.length;
-      const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
-      const manualQty = manualTotalQty();
-
       state.logs.unshift({
         when: new Date().toLocaleString(),
         note: asString($("logNote")?.value),
-        totalParts,
-        uniqueTracking,
-        totalScans,
-        manualQty
+        packages: whPackagesCount(),
+        parts: whPartsPieces(),
+        manualQty: manualTotalQty()
       });
-
       saveLogs();
-      renderLogsTable();
+      renderAll();
     });
 
-    on("btnLogExport", "click", exportLogsCSV);
+    on("btnLogExport", "click", () => {
+      if (!window.saveAs) {
+        alert("FileSaver (saveAs) failed to load. Refresh and try again.");
+        return;
+      }
+      const header = ["when","note","packages","parts","manualQty"];
+      const lines = [header.join(",")];
+      for (const l of state.logs) {
+        lines.push([
+          l.when,
+          `"${(l.note || "").replace(/"/g, '""')}"`,
+          l.packages,
+          l.parts,
+          l.manualQty
+        ].join(","));
+      }
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+      saveAs(blob, `rrpd_logs_${new Date().toISOString().slice(0,10)}.csv`);
+    });
 
     on("btnLogClearAll", "click", () => {
       if (!confirm("Delete all logs?")) return;
       state.logs = [];
       saveLogs();
-      renderLogsTable();
+      renderAll();
     });
 
+    // delete delegation (bind once)
     const body = $("tblLogs")?.querySelector("tbody");
     if (body) {
       body.addEventListener("click", (e) => {
@@ -679,140 +850,127 @@
         if (!Number.isFinite(i)) return;
         state.logs.splice(i, 1);
         saveLogs();
-        renderLogsTable();
+        renderAll();
       });
     }
   }
 
   // ----------------------------
-  // Export Summary
+  // Export Summary (PDF / Excel)
   // ----------------------------
-  function requireConfirm() {
-    const chk = $("chkConfirm");
-    if (!chk || !chk.checked) {
-      alert("Please check: 'I confirm this snapshot is correct.'");
-      return false;
-    }
-    return true;
-  }
+  function bindExport() {
+    on("btnExportSummary", "click", showExportModal);
 
-  function buildSummaryRows() {
-    const list = Array.from(state.byTracking.values());
-    return list
-      .slice()
-      .sort((a,b) => b.partsPieces - a.partsPieces)
-      .map(a => [a.tracking, a.carrier, a.trackingRows, a.partsPieces]);
-  }
+    on("btnExportCancel", "click", hideExportModal);
+    on("btnExportX", "click", hideExportModal);
+    on("exportBackdrop", "click", hideExportModal);
 
-  function buildManualRows() {
-    return state.manualCounts.map(m => [m.item, m.qty, m.carrier]);
+    on("btnExportPDF", "click", exportPDF);
+    on("btnExportExcel", "click", exportExcel);
   }
 
   function exportPDF() {
     if (!requireConfirm()) return;
-    if (!window.jspdf?.jsPDF) {
-      alert("jsPDF failed to load. Check internet/CDN.");
+
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      alert("jsPDF failed to load. Refresh and try again.");
       return;
     }
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
-    const list = Array.from(state.byTracking.values());
-    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
-    const uniqueTracking = list.length;
-    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
-    const multi = list.filter(x => x.partsPieces > 1).length;
-    const manualQty = manualTotalQty();
+    const packages = whPackagesCount();
+    const parts = whPartsPieces();
+    const manQty = manualTotalQty();
+    const manifestOut = computeManifestCompare();
 
     doc.setFontSize(16);
-    doc.text("RRPD Receiving Summary", 40, 50);
+    doc.text("RRPD Summary", 40, 50);
 
     doc.setFontSize(11);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 70);
-    doc.text(`Total Scans (tracking rows): ${totalScans}`, 40, 88);
-    doc.text(`Unique Tracking: ${uniqueTracking}`, 40, 104);
-    doc.text(`Total Parts (pieces): ${totalParts}`, 40, 120);
-    doc.text(`Multi-Part Boxes: ${multi}`, 40, 136);
-    doc.text(`Manual Qty (racks/axles/etc): ${manualQty}`, 40, 152);
+    doc.text(`Packages (label scans): ${packages}`, 40, 88);
+    doc.text(`Parts (pieces): ${parts}`, 40, 104);
+    doc.text(`Manual qty total: ${manQty}`, 40, 120);
+    doc.text(`Manifest missing: ${manifestOut.missing.length}`, 40, 136);
 
-    doc.autoTable({
-      startY: 175,
-      head: [["Tracking", "Carrier", "Tracking Rows", "Pieces"]],
-      body: buildSummaryRows(),
-      styles: { fontSize: 9 }
-    });
-
-    const after = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 18 : 520;
-
-    const manual = buildManualRows();
-    if (manual.length) {
-      doc.text("Manual Counts", 40, after);
+    if (doc.autoTable) {
+      const returnsPairs = computeReturnsCondition();
+      doc.text("Returns Condition (WH parts)", 40, 160);
       doc.autoTable({
-        startY: after + 10,
-        head: [["Item", "Qty", "Carrier"]],
-        body: manual,
+        startY: 170,
+        head: [["Condition", "Part Rows", "Pieces"]],
+        body: returnsPairs.map(([k,v]) => [k, v.rows, v.pieces]).slice(0, 40),
         styles: { fontSize: 9 }
       });
     }
 
     doc.save(`rrpd_summary_${new Date().toISOString().slice(0,10)}.pdf`);
-    hideSummaryModal(); // ✅ close modal after export
   }
 
   async function exportExcel() {
     if (!requireConfirm()) return;
-    if (!window.ExcelJS || !window.saveAs) {
-      alert("ExcelJS or FileSaver failed to load. Check internet/CDN.");
+
+    if (!window.ExcelJS) {
+      alert("ExcelJS failed to load. Refresh and try again.");
+      return;
+    }
+    if (!window.saveAs) {
+      alert("FileSaver (saveAs) failed to load. Refresh and try again.");
       return;
     }
 
     const wb = new ExcelJS.Workbook();
 
-    const list = Array.from(state.byTracking.values());
-    const totalScans = list.reduce((a, x) => a + x.trackingRows, 0);
-    const uniqueTracking = list.length;
-    const totalParts = list.reduce((a, x) => a + x.partsPieces, 0);
-    const multi = list.filter(x => x.partsPieces > 1).length;
-    const manualQty = manualTotalQty();
+    const ws = wb.addWorksheet("Summary");
+    const packages = whPackagesCount();
+    const parts = whPartsPieces();
+    const manQty = manualTotalQty();
+    const manifestOut = computeManifestCompare();
 
-    const ws = wb.addWorksheet("RRPD Summary");
-    ws.addRow(["RRPD Receiving Summary"]);
+    ws.addRow(["RRPD Summary"]);
     ws.addRow([`Generated: ${new Date().toLocaleString()}`]);
     ws.addRow([]);
-    ws.addRow(["Total Scans (tracking rows)", totalScans]);
-    ws.addRow(["Unique Tracking", uniqueTracking]);
-    ws.addRow(["Total Parts (pieces)", totalParts]);
-    ws.addRow(["Multi-Part Boxes", multi]);
-    ws.addRow(["Manual Qty (racks/axles/etc)", manualQty]);
+    ws.addRow(["Packages (label scans)", packages]);
+    ws.addRow(["Parts (pieces)", parts]);
+    ws.addRow(["Manual qty total", manQty]);
+    ws.addRow(["Manifest missing", manifestOut.missing.length]);
     ws.addRow([]);
 
-    const header = ws.addRow(["Tracking", "Carrier", "Tracking Rows", "Pieces"]);
-    header.font = { bold: true };
-
-    for (const r of buildSummaryRows()) ws.addRow(r);
+    ws.addRow(["Returns Condition"]);
+    ws.addRow(["Condition", "Part Rows", "Pieces"]).font = { bold: true };
+    for (const [k,v] of computeReturnsCondition()) ws.addRow([k, v.rows, v.pieces]);
     ws.columns.forEach(c => (c.width = 24));
 
     const ws2 = wb.addWorksheet("Manual Counts");
-    const header2 = ws2.addRow(["Item", "Qty", "Carrier"]);
-    header2.font = { bold: true };
-    for (const r of buildManualRows()) ws2.addRow(r);
+    ws2.addRow(["Item","Qty","Condition"]).font = { bold: true };
+    for (const m of state.manualCounts) ws2.addRow([m.item, m.qty, m.condition]);
     ws2.columns.forEach(c => (c.width = 26));
+
+    const ws3 = wb.addWorksheet("Manifest Missing");
+    ws3.addRow(["Tracking"]).font = { bold: true };
+    for (const t of manifestOut.missing) ws3.addRow([t]);
+    ws3.columns.forEach(c => (c.width = 30));
 
     const buf = await wb.xlsx.writeBuffer();
     saveAs(
       new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
       `rrpd_summary_${new Date().toISOString().slice(0,10)}.xlsx`
     );
-
-    hideSummaryModal(); // ✅ close modal after export
   }
 
-  function bindExport() {
-    on("btnExportSummary", "click", showSummaryModal);
-    on("btnExportPDF", "click", exportPDF);
-    on("btnExportExcel", "click", exportExcel);
+  // ----------------------------
+  // Bind Tracking Modal
+  // ----------------------------
+  function bindTrackingModal() {
+    on("btnViewAllTracking", "click", showTrackingModalOrDownload);
+    on("btnModalX", "click", hideTrackingModal);
+    on("btnModalClose", "click", hideTrackingModal);
+    on("modalBackdrop", "click", hideTrackingModal);
+  }
 
+  function bindTopButtons() {
     on("btnSaveLogs", "click", () => setActiveTab("logs"));
   }
 
@@ -820,23 +978,24 @@
   // Init
   // ----------------------------
   document.addEventListener("DOMContentLoaded", () => {
-    try {
-      bindTabs();
-      bindModal();
-      bindCSV();
-      bindManual();
-      bindLogs();
-      bindExport();
+    bindTabs();
+    bindWHUpload();
+    bindManifestUpload();
+    bindManualCounts();
+    bindLooseParts();
+    bindCarriers();
+    bindTrackingModal();
+    bindLogs();
+    bindExport();
+    bindTopButtons();
 
-      computeFromRows([]);
-      renderAll();
+    renderAll();
 
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") hideSummaryModal();
-      });
-    } catch (err) {
-      console.error("Init error:", err);
-      alert("RRPD init error — open Console for details.");
-    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        hideTrackingModal();
+        hideExportModal();
+      }
+    });
   });
 })();
