@@ -88,18 +88,20 @@
   // - "Packing Slip"
   // - "Return Label Scan"
   // - "Packing Slip Scan"
-  function isLabelType(descRaw) {
-    const d = safeLower(descRaw).replace(/\s+/g, " ").trim();
-    if (!d) return false;
+function isLabelType(descRaw) {
+  const d = safeLower(descRaw)
+    .replace(/\s+/g, " ")
+    .replace(/[^a-z\s]/g, "")
+    .trim();
 
-    if (d === "return label" || d === "packing slip") return true;
+  if (!d) return false;
 
-    // allow safe variants only if they START with the label phrase
-    if (d.startsWith("return label")) return true;
-    if (d.startsWith("packing slip")) return true;
+  // flexible match
+  if (d.includes("return label")) return true;
+  if (d.includes("packing slip")) return true;
 
-    return false;
-  }
+  return false;
+}
 
   function parseIntSafe(v) {
     const s = asString(v);
