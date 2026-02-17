@@ -1001,3 +1001,44 @@ function isLabelType(descRaw) {
     });
   });
 })();
+function debugLabelDetection(rows) {
+  const trackingKeys = [
+    "Track Number",
+    "Track Num",
+    "TrackNum",
+    "Tracking",
+    "Tracking Number",
+    "TrackingNumber",
+    "Return Tracking"
+  ];
+
+  const descKeys = [
+    "PN Description",
+    "PNDescription",
+    "Description",
+    "Part Description"
+  ];
+
+  console.log("===== DEBUG: LABEL DETECTION =====");
+
+  rows.slice(0, 50).forEach((row, index) => {
+    const trackingRaw = pickField(row, trackingKeys);
+    const descRaw = pickField(row, descKeys);
+
+    const tracking = normalizeTracking(trackingRaw);
+    const desc = String(descRaw || "").trim();
+    const isLabel = isLabelType(desc);
+
+    if (desc.toLowerCase() === "return label" || desc.toLowerCase() === "packing slip") {
+      console.log({
+        row: index + 1,
+        trackingRaw,
+        trackingNormalized: tracking,
+        pnDescription: desc,
+        detectedAsLabel: isLabel
+      });
+    }
+  });
+
+  console.log("===== END DEBUG =====");
+}
