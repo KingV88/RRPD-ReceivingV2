@@ -7,17 +7,10 @@
 
   <link rel="stylesheet" href="style.css" />
 
-  <!-- CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
-  <!-- Charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-  <!-- PDF export -->
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
-
-  <!-- Excel export -->
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 </head>
@@ -25,6 +18,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
+      <img src="assets/detroit-axle-logo.png" class="logo" />
       <div>
         <div class="title">RRPD Receiving Dashboard</div>
         <div class="subtitle">WH Returns + Manifest Compare + Manual Counts</div>
@@ -32,318 +26,101 @@
     </div>
 
     <div class="top-actions">
-      <label class="file-btn" title="Upload WH Returns CSV">
+      <label class="file-btn">
         <span>Upload WH CSV</span>
         <input id="whFile" type="file" accept=".csv" />
       </label>
 
-      <button id="btnSaveLogs" class="btn" type="button">Save to Logs</button>
-      <button id="btnExportSummary" class="btn primary" type="button">Export Summary</button>
+      <button id="btnCopyEmail" class="btn">Copy Email</button>
+      <button id="btnSaveLogs" class="btn">Logs</button>
+      <button id="btnExportSummary" class="btn primary">Export</button>
     </div>
   </header>
 
   <main class="shell">
-    <!-- TABS -->
+
     <nav class="tabs" id="tabs">
-      <button class="tab active" data-tab="dashboard" type="button">Dashboard</button>
-      <button class="tab" data-tab="returns" type="button">Returns Condition</button>
-      <button class="tab" data-tab="manual" type="button">Manual Counts</button>
-      <button class="tab" data-tab="carriers" type="button">Carriers</button>
-      <button class="tab" data-tab="manifest" type="button">Manifest Compare</button>
-      <button class="tab" data-tab="loose" type="button">Loose Parts</button>
-      <button class="tab" data-tab="logs" type="button">Logs</button>
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="returns">Returns</button>
+      <button class="tab" data-tab="manual">Manual</button>
+      <button class="tab" data-tab="manifest">Manifest</button>
+      <button class="tab" data-tab="logs">Logs</button>
     </nav>
 
     <!-- DASHBOARD -->
     <section class="panel active" id="panel-dashboard">
-      <div class="rules">
-        <b>Rules:</b>
-        <span class="pill">Packages</span> = rows where <b>PN Description</b> is <b>Return Label</b> or <b>Packing Slip</b>.
-        <span class="pill">Parts</span> = all other rows (pieces).
-        <div class="hint">Dashboard shows only packages, parts, and label tracking samples (with View All).</div>
-      </div>
 
       <div class="grid grid-2">
         <div class="card">
-          <div class="card-label">Packages (Label Scans)</div>
+          <div class="card-label">Packages</div>
           <div class="card-value" id="mPackages">0</div>
         </div>
 
         <div class="card">
-          <div class="card-label">Parts (Pieces)</div>
+          <div class="card-label">Parts</div>
           <div class="card-value" id="mParts">0</div>
         </div>
       </div>
 
-      <div class="card block">
-        <div class="card-head">
-          <div>
-            <div class="card-label">Tracking Samples (Latest 25)</div>
-            <div class="hint">These are label scans (Return Label / Packing Slip). Not unique.</div>
-          </div>
-          <button class="btn" id="btnViewAllTracking" type="button">View All</button>
-        </div>
-
-        <div class="table-wrap">
-          <table class="table" id="tblTrackingSamples">
-            <thead>
-              <tr><th>#</th><th>Tracking</th><th>Type</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+      <!-- CONDITION CARDS -->
+      <div class="condition-grid">
+        <div class="card good"><div class="card-label">Good</div><div class="card-value" id="cGood">0</div></div>
+        <div class="card used"><div class="card-label">Used</div><div class="card-value" id="cUsed">0</div></div>
+        <div class="card core"><div class="card-label">Core</div><div class="card-value" id="cCore">0</div></div>
+        <div class="card missing"><div class="card-label">Missing</div><div class="card-value" id="cMissing">0</div></div>
+        <div class="card damaged"><div class="card-label">Damaged</div><div class="card-value" id="cDamaged">0</div></div>
+        <div class="card notour"><div class="card-label">Not Our Parts</div><div class="card-value" id="cNotOur">0</div></div>
       </div>
+
     </section>
 
-    <!-- RETURNS CONDITION -->
+    <!-- RETURNS -->
     <section class="panel" id="panel-returns">
-      <div class="two-col">
-        <div class="card">
-          <div class="card-label">Returns Condition (WH Parts Only)</div>
-          <div class="hint">Counts are based on PART rows only (anything not Return Label / Packing Slip).</div>
-          <div class="table-wrap">
-            <table class="table" id="tblReturns">
-              <thead>
-                <tr><th>Condition</th><th>Part Rows</th><th>Pieces</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">Returns Condition (Bar)</div>
-          <canvas id="returnsChart" height="150"></canvas>
-          <div class="hint">Top 10 by pieces.</div>
-        </div>
+      <div class="card">
+        <table class="table" id="tblReturns">
+          <thead><tr><th>Condition</th><th>Rows</th><th>Pieces</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
-    <!-- MANUAL COUNTS -->
+    <!-- MANUAL -->
     <section class="panel" id="panel-manual">
-      <div class="two-col">
-        <div class="card">
-          <div class="card-label">Manual Counts (Racks / Axles / Gearboxes / etc)</div>
-          <div class="hint">Manual-only: Item + Qty + Condition.</div>
+      <div class="card">
+        <input id="manItem" placeholder="Item">
+        <input id="manQty" placeholder="Qty">
+        <input id="manCondition" placeholder="Condition">
+        <button id="btnManualAdd" class="btn primary">Add</button>
 
-          <div class="manual-form">
-            <input class="input" id="manItem" placeholder="Item (Racks / Axles / Gearboxes)" />
-            <input class="input" id="manQty" placeholder="Qty" inputmode="numeric" />
-            <input class="input" id="manCondition" placeholder="Condition (Good / Damaged / Not Our Part)" />
-            <button class="btn primary" id="btnManualAdd" type="button">Add</button>
-            <button class="btn" id="btnManualClear" type="button">Clear</button>
-          </div>
-
-          <div class="table-wrap">
-            <table class="table" id="tblManual">
-              <thead>
-                <tr><th>Item</th><th>Qty</th><th>Condition</th><th>Action</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">Manual Counts by Condition (Bar)</div>
-          <canvas id="manualChart" height="150"></canvas>
-          <div class="hint">Top 10 manual conditions.</div>
-        </div>
+        <table class="table" id="tblManual">
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
-    <!-- CARRIERS (MANUAL ENTRY) -->
-    <section class="panel" id="panel-carriers">
-      <div class="two-col">
-        <div class="card">
-          <div class="card-label">Carriers (Manual Entry)</div>
-          <div class="hint">Enter totals manually (we do NOT auto-detect carriers).</div>
-
-          <div class="manual-form">
-            <input class="input" id="carFedEx" placeholder="FedEx count" inputmode="numeric" />
-            <input class="input" id="carUPS" placeholder="UPS count" inputmode="numeric" />
-            <input class="input" id="carUSPS" placeholder="USPS count" inputmode="numeric" />
-            <input class="input" id="carOther" placeholder="Other count" inputmode="numeric" />
-            <button class="btn primary" id="btnCarriersApply" type="button">Apply</button>
-            <button class="btn" id="btnCarriersClear" type="button">Clear</button>
-          </div>
-
-          <div class="table-wrap">
-            <table class="table" id="tblCarriers">
-              <thead><tr><th>Carrier</th><th>Count</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">Carriers (Bar)</div>
-          <canvas id="carrierChart" height="150"></canvas>
-          <div class="hint">Shows your manual carrier totals.</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- MANIFEST COMPARE -->
+    <!-- MANIFEST -->
     <section class="panel" id="panel-manifest">
       <div class="card">
-        <div class="card-label">Manifest Compare (FedEx CSV vs WH Label Scans)</div>
-        <div class="hint">Upload FedEx manifest CSV here. We compare against WH label scans (Return Label / Packing Slip).</div>
-
-        <div class="manual-form">
-          <label class="file-btn" title="Upload FedEx Manifest CSV">
-            <span>Upload Manifest CSV</span>
-            <input id="manifestFile" type="file" accept=".csv" />
-          </label>
-          <button class="btn" id="btnManifestClear" type="button">Clear Manifest</button>
-        </div>
-
-        <div class="grid grid-3" style="margin-top:10px;">
-          <div class="card">
-            <div class="card-label">Manifest Total</div>
-            <div class="card-value" id="mManifestTotal">0</div>
-          </div>
-          <div class="card">
-            <div class="card-label">Matched</div>
-            <div class="card-value" id="mManifestMatched">0</div>
-          </div>
-          <div class="card">
-            <div class="card-label">Missing</div>
-            <div class="card-value" id="mManifestMissing">0</div>
-          </div>
-        </div>
-
-        <div class="two-col" style="margin-top:10px;">
-          <div class="card">
-            <div class="card-label">Missing (Manifest → NOT scanned)</div>
-            <div class="table-wrap">
-              <table class="table" id="tblMissing">
-                <thead><tr><th>#</th><th>Tracking</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-label">Extra (Scanned → NOT in Manifest)</div>
-            <div class="table-wrap">
-              <table class="table" id="tblExtra">
-                <thead><tr><th>#</th><th>Tracking</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- LOOSE PARTS -->
-    <section class="panel" id="panel-loose">
-      <div class="card">
-        <div class="card-label">Loose Parts (Manual Entry)</div>
-        <div class="hint">Manual-only: Part + Qty + Condition.</div>
-
-        <div class="manual-form">
-          <input class="input" id="loosePart" placeholder="Part #" />
-          <input class="input" id="looseQty" placeholder="Qty" inputmode="numeric" />
-          <input class="input" id="looseCondition" placeholder="Condition" />
-          <button class="btn primary" id="btnLooseAdd" type="button">Add</button>
-          <button class="btn" id="btnLooseClear" type="button">Clear</button>
-        </div>
-
-        <div class="table-wrap">
-          <table class="table" id="tblLoose">
-            <thead><tr><th>Part</th><th>Qty</th><th>Condition</th><th>Action</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
+        <input id="manifestFile" type="file">
+        <div id="mManifestMissing">0</div>
       </div>
     </section>
 
     <!-- LOGS -->
     <section class="panel" id="panel-logs">
       <div class="card">
-        <div class="card-label">Logs</div>
-        <div class="hint">Saved snapshots stored in your browser (localStorage).</div>
-
-        <div class="manual-form">
-          <input class="input" id="logNote" placeholder="Optional note (shift / lane / team)" />
-          <button class="btn primary" id="btnLogAdd" type="button">Save Snapshot</button>
-          <button class="btn" id="btnLogExport" type="button">Export CSV</button>
-          <button class="btn danger" id="btnLogClearAll" type="button">Delete All</button>
-        </div>
-
-        <div class="table-wrap">
-          <table class="table" id="tblLogs">
-            <thead><tr><th>When</th><th>Note</th><th>Packages</th><th>Parts</th><th>Manual Qty</th><th>Action</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="footer">
-    <div id="statusLine">No WH CSV loaded.</div>
-  </footer>
-
-  <!-- MODAL: VIEW ALL TRACKING -->
-  <div id="modalBackdrop" class="modal-backdrop hidden"></div>
-
-  <div id="modalTracking" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-header">
-      <div class="modal-title">All Label Scans (Return Label / Packing Slip)</div>
-      <button class="icon-btn" id="btnModalX" title="Close" type="button">×</button>
-    </div>
-
-    <div class="modal-body">
-      <div class="hint">This list includes duplicates (every label scan row).</div>
-      <div class="table-wrap" style="margin-top:10px;">
-        <table class="table" id="tblAllTracking">
-          <thead><tr><th>#</th><th>Tracking</th><th>Type</th></tr></thead>
+        <table class="table" id="tblLogs">
           <tbody></tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <div class="modal-footer">
-      <button class="btn" id="btnModalClose" type="button">Close</button>
-    </div>
-  </div>
+  </main>
 
-  <!-- MODAL: EXPORT -->
-  <div id="exportBackdrop" class="modal-backdrop hidden"></div>
+  <footer class="footer">
+    <div id="statusLine">Ready</div>
+  </footer>
 
-  <div id="exportModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-header">
-      <div class="modal-title">Export Preview</div>
-      <button class="icon-btn" id="btnExportX" title="Close" type="button">×</button>
-    </div>
-
-    <div class="modal-body">
-      <div class="preview">
-        <div class="preview-row">
-          <div><b>Packages:</b> <span id="pPackages">0</span></div>
-          <div><b>Parts (pieces):</b> <span id="pParts">0</span></div>
-          <div><b>Manual Qty total:</b> <span id="pManualQty">0</span></div>
-          <div><b>Manifest Missing:</b> <span id="pManifestMissing">0</span></div>
-        </div>
-
-        <label class="confirm">
-          <input type="checkbox" id="chkConfirm" />
-          <span>I confirm this snapshot is correct.</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn" id="btnExportCancel" type="button">Cancel</button>
-      <button class="btn" id="btnExportPDF" type="button">Export PDF</button>
-      <button class="btn primary" id="btnExportExcel" type="button">Export Excel</button>
-    </div>
-  </div>
-
-  <!-- MUST BE LAST -->
   <script src="script.js"></script>
 </body>
 </html>
